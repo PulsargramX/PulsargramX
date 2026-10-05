@@ -101,6 +101,12 @@ class PublicSnapshotTest(unittest.TestCase):
       with self.assertRaisesRegex(ValueError, "identity text"):
         AUDIT.scan(data, ("private identity",), "artifact")
 
+  def test_elf_scan_ignores_identity_split_at_itanium_name_boundary(self):
+    forbidden = "le" + "ese"
+    AUDIT.scan_elf(b"\x7fELF _Z5Scal" + b"eeseEE", (forbidden,), "libfixture.so")
+    with self.assertRaisesRegex(ValueError, "identity text"):
+      AUDIT.scan_elf(b"\x7fELF " + forbidden.encode(), (forbidden,), "libfixture.so")
+
   def test_source_audit_rejects_private_identity_in_commit_metadata(self):
     EXPORT.snapshot(self.root, self.destination, "HEAD")
     git(self.destination, "-c", "user.name=private identity", "commit", "--allow-empty",

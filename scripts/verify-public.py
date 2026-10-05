@@ -4,6 +4,7 @@
 import argparse
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 from zipfile import ZipFile
@@ -32,6 +33,35 @@ def scan(data, patterns, location):
   lower = data.lower()
   if any(pattern in lower for pattern in needles(patterns)):
     raise ValueError(f"Private identity text found in {location}")
+
+
+def scan_elf(data, patterns, location):
+  """Scan ELF bytes while avoiding matches split across Itanium ABI name boundaries."""
+  lower = data.lower()
+  length_matches = list(re.finditer(rb"([0-9]+)", lower))
+  for pattern in needles(patterns):
+    start = 0
+    while (position := lower.find(pattern, start)) >= 0:
+      end = position + len(pattern)
+      split_name = False
+      for length_match in length_matches:
+        name_start = length_match.end()
+        name_end = name_start + int(length_match.group(1))
+        if name_start < position < name_end < end:
+          mangled_start = lower.rfind(b"_z", max(0, length_match.start() - 256),
+                                      length_match.start())
+          name = lower[name_start:name_end]
+          next_code = lower[name_end:name_end + 1]
+          mangled_prefix = lower[mangled_start:name_start] if mangled_start >= 0 else b""
+          if (mangled_start >= 0 and re.fullmatch(rb"[a-z0-9_]+", mangled_prefix) and
+              len(name) == name_end - name_start and
+              re.fullmatch(rb"[a-z_][a-z0-9_]*", name) and
+              next_code in b"eijmnstuvwxyz"):
+            split_name = True
+            break
+      if not split_name:
+        raise ValueError(f"Private identity text found in {location}")
+      start = end
 
 
 def check_history(root, patterns=()):
@@ -93,7 +123,10 @@ def check_apk(apk, build_tools, patterns=()):
     for entry in archive.infolist():
       scan(entry.filename.encode(), patterns, "an APK entry name")
       data = archive.read(entry)
-      scan(data, patterns, entry.filename)
+      if data.startswith(b"\x7fELF"):
+        scan_elf(data, patterns, entry.filename)
+      else:
+        scan(data, patterns, entry.filename)
       scan(data, PRIVATE_KEYS, entry.filename)
   print("Verified public APK identity and absence of personal settings")
 
