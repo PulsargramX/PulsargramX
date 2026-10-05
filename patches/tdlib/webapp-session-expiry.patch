@@ -1,0 +1,83 @@
+--- a/td/telegram/WebAppManager.cpp
++++ b/td/telegram/WebAppManager.cpp
+@@ -290,16 +290,18 @@
+ 
+ class ProlongWebViewQuery final : public Td::ResultHandler {
+   DialogId dialog_id_;
++  int64 query_id_ = 0;
+ 
+  public:
+   void send(DialogId dialog_id, UserId bot_user_id, int64 query_id, const MessageTopic &message_topic,
+             const MessageInputReplyTo &input_reply_to, bool silent, DialogId as_dialog_id) {
+     dialog_id_ = dialog_id;
++    query_id_ = query_id;
+ 
+     auto input_peer = td_->dialog_manager_->get_input_peer(dialog_id, AccessRights::Write);
+     auto r_input_user = td_->user_manager_->get_input_user(bot_user_id);
+     if (input_peer == nullptr || r_input_user.is_error()) {
+-      return;
++      return on_error(Status::Error(400, "WEB_APP_CHAT_UNAVAILABLE"));
+     }
+ 
+     int32 flags = 0;
+@@ -329,12 +331,17 @@
+ 
+     bool ptr = result_ptr.ok();
+     if (!ptr) {
+-      LOG(ERROR) << "Failed to prolong a web view";
++      on_error(Status::Error(400, "WEB_APP_SESSION_EXPIRED"));
+     }
+   }
+ 
+   void on_error(Status status) final {
+     td_->dialog_manager_->on_get_dialog_error(dialog_id_, status, "ProlongWebViewQuery");
++    // Retry transport errors, flood waits, and server failures on the existing timer.
++    // Queue removal to avoid mutating opened_web_views_ while ping_web_view iterates it.
++    if (status.code() == 400 || status.code() == 401 || status.code() == 403) {
++      send_closure(td_->web_app_manager_actor_, &WebAppManager::on_web_view_error, query_id_, std::move(status));
++    }
+   }
+ };
+ 
+@@ -602,6 +609,18 @@
+   opened_web_views_.emplace(query_id, std::move(opened_web_view));
+ }
+ 
++void WebAppManager::on_web_view_error(int64 query_id, Status error) {
++  if (G()->close_flag() || opened_web_views_.count(query_id) == 0) {
++    return;
++  }
++  opened_web_views_.erase(query_id);
++  if (opened_web_views_.empty()) {
++    ping_web_view_timeout_.cancel_timeout();
++  }
++  td_->send_update(td_api::make_object<td_api::updateWebAppClosed>(
++      query_id, td_api::make_object<td_api::error>(error.code(), error.message().str())));
++}
++
+ void WebAppManager::close_web_view(int64 query_id, Promise<Unit> &&promise) {
+   opened_web_views_.erase(query_id);
+   if (opened_web_views_.empty()) {
+--- a/td/telegram/WebAppManager.h
++++ b/td/telegram/WebAppManager.h
+@@ -59,6 +59,8 @@
+ 
+   void close_web_view(int64 query_id, Promise<Unit> &&promise);
+ 
++  void on_web_view_error(int64 query_id, Status error);
++
+   void invoke_web_view_custom_method(UserId bot_user_id, const string &method, const string &parameters,
+                                      Promise<td_api::object_ptr<td_api::customRequestResult>> &&promise);
+ 
+--- a/td/generate/scheme/td_api.tl
++++ b/td/generate/scheme/td_api.tl
+@@ -10996,6 +10996,9 @@
+ //@description A message was sent by an opened Web App, so the Web App needs to be closed @web_app_launch_id Identifier of Web App launch
+ updateWebAppMessageSent web_app_launch_id:int64 = Update;
+ 
++//@description An opened Web App session has expired or can no longer be prolonged; the Web App must be closed @web_app_launch_id Identifier of the Web App launch @error The terminal error that closed the session
++updateWebAppClosed web_app_launch_id:int64 error:error = Update;
++
+ //@description The list of active emoji reactions has changed @emojis The new list of active emoji reactions
+ updateActiveEmojiReactions emojis:vector<string> = Update;
+ 

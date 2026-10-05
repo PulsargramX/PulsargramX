@@ -1,0 +1,87 @@
+--- a/td/telegram/RequestedDialogType.h
++++ b/td/telegram/RequestedDialogType.h
+@@ -68,7 +68,7 @@
+ 
+   int32 get_button_id() const;
+ 
+-  Status check_shared_dialog(Td *td, DialogId dialog_id) const;
++  Status check_shared_dialog(Td *td, DialogId dialog_id, UserId requesting_bot_user_id) const;
+ 
+   Status check_shared_dialog_count(size_t count) const;
+ 
+--- a/td/telegram/RequestedDialogType.cpp
++++ b/td/telegram/RequestedDialogType.cpp
+@@ -227,9 +227,16 @@
+   return button_id_;
+ }
+ 
+-Status RequestedDialogType::check_shared_dialog(Td *td, DialogId dialog_id) const {
++Status RequestedDialogType::check_shared_dialog(Td *td, DialogId dialog_id, UserId requesting_bot_user_id) const {
+   switch (dialog_id.get_type()) {
+     case DialogType::User: {
++      if (type_ == Type::CreateBot) {
++        if (!requesting_bot_user_id.is_valid() ||
++            !td->user_manager_->is_user_managed_bot(dialog_id.get_user_id(), requesting_bot_user_id)) {
++          return Status::Error(400, "The bot isn't owned by the user or managed by the requesting bot");
++        }
++        break;
++      }
+       if (type_ != Type::User) {
+         return Status::Error(400, "Wrong chat type");
+       }
+--- a/td/telegram/UserManager.h
++++ b/td/telegram/UserManager.h
+@@ -256,6 +256,8 @@
+ 
+   bool is_user_bot(UserId user_id) const;
+ 
++  bool is_user_managed_bot(UserId user_id, UserId manager_bot_user_id) const;
++
+   bool is_user_forum_bot(UserId user_id) const;
+ 
+   struct BotData {
+--- a/td/telegram/UserManager.cpp
++++ b/td/telegram/UserManager.cpp
+@@ -5413,6 +5413,13 @@
+   return is_user_bot(get_user(user_id));
+ }
+ 
++bool UserManager::is_user_managed_bot(UserId user_id, UserId manager_bot_user_id) const {
++  const User *u = get_user(user_id);
++  const UserFull *user_full = get_user_full(user_id);
++  return is_user_bot(u) && u->can_be_edited_bot && user_full != nullptr && user_full->bot_info != nullptr &&
++         user_full->bot_info->manager_bot_user_id == manager_bot_user_id;
++}
++
+ bool UserManager::is_user_bot(const User *u) {
+   return u != nullptr && !u->is_deleted && u->is_bot;
+ }
+--- a/td/telegram/MessageQueryManager.cpp
++++ b/td/telegram/MessageQueryManager.cpp
+@@ -3240,6 +3240,17 @@
+   }
+   TRY_STATUS_PROMISE(promise, requested_dialog_type->check_shared_dialog_count(shared_dialog_ids.size()));
+ 
++  UserId requesting_bot_user_id = bot_user_id;
++  if (!requesting_bot_user_id.is_valid() && message_full_id != MessageFullId()) {
++    auto message = td_->messages_manager_->get_message_object(message_full_id, "share_dialogs_with_bot");
++    if (message != nullptr) {
++      requesting_bot_user_id = UserId(message->via_bot_user_id_);
++      if (!requesting_bot_user_id.is_valid() && message->sender_id_->get_id() == td_api::messageSenderUser::ID) {
++        requesting_bot_user_id = UserId(static_cast<const td_api::messageSenderUser *>(message->sender_id_.get())->user_id_);
++      }
++    }
++  }
++
+   for (auto shared_dialog_id : shared_dialog_ids) {
+     if (shared_dialog_id.get_type() != DialogType::User) {
+       if (!td_->dialog_manager_->have_dialog_force(shared_dialog_id, "share_dialogs_with_bot")) {
+@@ -3253,7 +3264,7 @@
+         return promise.set_error(400, "Shared user not found");
+       }
+     }
+-    TRY_STATUS_PROMISE(promise, requested_dialog_type->check_shared_dialog(td_, shared_dialog_id));
++    TRY_STATUS_PROMISE(promise, requested_dialog_type->check_shared_dialog(td_, shared_dialog_id, requesting_bot_user_id));
+   }
+   if (only_check) {
+     return promise.set_value(Unit());

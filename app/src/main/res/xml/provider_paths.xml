@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+  <files-path name="logs" path="logs/" />
+  <files-path name="vcf" path="vcf/" />
+  <files-path name="media" path="media/" />
+  <external-path name="files" path="." />
+  <external-path name="miui" path="MIUI/ringtone/" />
+  <files-path name="ringtones" path="ringtones/" />
+  <cache-path name="cache" path="." />
+
+</paths>

@@ -1,0 +1,13 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -140,7 +140,9 @@
+ endif()
+ 
+ include(GetGitRevisionDescription)
+-get_git_head_revision(TD_GIT_REFSPEC TD_GIT_COMMIT_HASH)
++if (NOT TD_GIT_COMMIT_HASH)
++  get_git_head_revision(TD_GIT_REFSPEC TD_GIT_COMMIT_HASH)
++endif()
+ message(STATUS "Git state: ${TD_GIT_COMMIT_HASH}")
+ 
+ configure_file("${CMAKE_CURRENT_SOURCE_DIR}/td/telegram/GitCommitHash.cpp.in" "${CMAKE_CURRENT_BINARY_DIR}/td/telegram/GitCommitHash.cpp" @ONLY)

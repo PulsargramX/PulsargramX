@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "app": "Pulsargram X",
+  "exportDate": "2026-04-22T10:00:00Z",
+  "filters": [
+    {
+      "pattern": "spam*",
+      "action": 0
+    },
+    {
+      "pattern": "*advertisement*",
+      "action": 1
+    },
+    {
+      "pattern": "important",
+      "action": 2
+    },
+    {
+      "pattern": "*promo*",
+      "action": 0
+    },
+    {
+      "pattern": "urgent",
+      "action": 2
+    }
+  ]
+}

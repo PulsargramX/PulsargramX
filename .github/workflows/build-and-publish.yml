@@ -1,0 +1,440 @@
+name: Build and publish
+
+# Build the arm64 release with upstream Gradle native-library tasks.
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      publish_to_telegram:
+        description: 'Publish to Telegram channel'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: build-and-publish-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    
+    env:
+      TERM: xterm
+      PUBLIC_FORBIDDEN_PATTERNS: ${{ secrets.PUBLIC_FORBIDDEN_PATTERNS }}
+      # Force Node.js 24 for all actions to avoid deprecation warnings
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    
+    strategy:
+      matrix:
+        flavor:
+          - arm64
+        build_type:
+          - Release
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          submodules: false
+          fetch-depth: 1
+          lfs: false
+
+      - name: Verify public source
+        run: |
+          if [ -z "$PUBLIC_FORBIDDEN_PATTERNS" ]; then
+            echo "Set PUBLIC_FORBIDDEN_PATTERNS before building the public app" >&2
+            exit 1
+          fi
+          python3 scripts/verify-public.py --source
+
+      - name: Check public build secrets
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          FIREBASE_CONFIG_BASE64: ${{ secrets.FIREBASE_CONFIG_BASE64 }}
+        run: |
+          python3 - <<'PY'
+          import os
+          required = ('KEYSTORE_BASE64', 'KEYSTORE_PASSWORD', 'KEY_ALIAS', 'KEY_PASSWORD',
+                      'TELEGRAM_API_ID', 'TELEGRAM_API_HASH', 'FIREBASE_CONFIG_BASE64')
+          missing = [name for name in required if not os.environ.get(name, '').strip()]
+          if missing:
+              raise SystemExit('Missing repository secrets: ' + ', '.join(missing))
+          PY
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/.ghcup
+          echo "Disk space after cleanup:"
+          df -h
+
+      - name: Checkout required submodules (shallow)
+        run: |
+          git lfs install
+
+          mapfile -t root_submodules < <(
+            git config --file .gitmodules --get-regexp '^submodule\..*\.path$' |
+              awk '{print $2}'
+          )
+
+          GIT_LFS_SKIP_SMUDGE=1 git submodule update \
+            --init --depth 1 --jobs "$(nproc)" -- "${root_submodules[@]}"
+          GIT_LFS_SKIP_SMUDGE=1 git -C tdlib submodule update \
+            --init --depth 1 --jobs "$(nproc)" -- source/td source/openssl
+          GIT_LFS_SKIP_SMUDGE=1 git -C vkryl/leveldb submodule update \
+            --init --depth 1 --jobs "$(nproc)" -- jni/leveldb jni/jni-utils
+
+          ndk_version=$(./scripts/read-property.sh version.properties version.ndk_primary)
+          git -C tdlib lfs pull \
+            --include="src/main/libs/$ndk_version/libs/arm64-v8a/libtdjni.so,openssl/$ndk_version/arm64-v8a/lib/libcryptox.so,openssl/$ndk_version/arm64-v8a/lib/libsslx.so"
+      
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Check public policies and release helpers
+        run: |
+          python3 -m unittest scripts.tests.public_variant_test \
+            scripts.tests.verify_release_test scripts.tests.build_helper_test \
+            scripts.tests.public_secrets_test
+          python3 .github/scripts/test_upload_to_telegram.py
+
+      - name: Install Android build tools
+        run: |
+          yes | /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          sdk_package=$(./scripts/read-property.sh version.properties version.sdk_package)
+          build_tools=$(./scripts/read-property.sh version.properties version.build_tools)
+          ndk_version=$(./scripts/read-property.sh version.properties version.ndk_primary)
+          cmake_version=$(./scripts/read-property.sh version.properties version.cmake)
+          /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --install \
+            "platforms;$sdk_package" "build-tools;$build_tools" \
+            "ndk;$ndk_version" "cmake;$cmake_version"
+      
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git git-lfs wget sed make clang g++ gperf php-cli unzip ccache
+          git lfs install
+      
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          # Restore existing dependencies without creating new cache entries.
+          cache-read-only: true
+          validate-wrappers: false
+      
+      - name: Decode keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          umask 077
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$GITHUB_WORKSPACE/release.keystore"
+      
+      - name: Create keystore.properties
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          umask 077
+          cat > "$GITHUB_WORKSPACE/keystore.properties" << EOF
+          keystore.file=$GITHUB_WORKSPACE/release.keystore
+          keystore.password=$KEYSTORE_PASSWORD
+          key.alias=$KEY_ALIAS
+          key.password=$KEY_PASSWORD
+          EOF
+          echo "✅ keystore.properties created successfully"
+      
+      - name: Create local.properties
+        env:
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+        run: |
+          umask 077
+          cat > local.properties << EOF
+          sdk.dir=/usr/local/lib/android/sdk
+          keystore.file=${{ github.workspace }}/keystore.properties
+          app.id=com.pulsargram.x
+          app.name=Pulsargram X
+          app.public.sources_url=https://github.com/${{ github.repository }}
+          app.public.keystore_file=${{ github.workspace }}/keystore.properties
+          app.download_url=https://github.com/${{ github.repository }}
+          telegram.api_id=$TELEGRAM_API_ID
+          telegram.api_hash=$TELEGRAM_API_HASH
+          youtube.api_key=
+          tgx.extension=none
+          EOF
+          echo "✅ local.properties created successfully"
+      
+      - name: Configure public Firebase app
+        env:
+          FIREBASE_CONFIG_BASE64: ${{ secrets.FIREBASE_CONFIG_BASE64 }}
+        run: |
+          if [ -z "$FIREBASE_CONFIG_BASE64" ]; then
+            echo "Set FIREBASE_CONFIG_BASE64 to the public app's google-services.json" >&2
+            exit 1
+          fi
+          umask 077
+          mkdir -p app/src/public
+          printf '%s' "$FIREBASE_CONFIG_BASE64" | base64 -d > app/src/public/google-services.json
+          python3 - <<'PY'
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, 'scripts')
+          from public_secrets import firebase_value
+          try:
+              firebase_value(Path('app/src/public/google-services.json'))
+          except (ValueError, OSError):
+              raise SystemExit('Invalid Firebase configuration for public app com.pulsargram.x')
+          PY
+
+      # Release the native build's JVM before Java/Kotlin compilation and R8.
+      - name: Build arm64 native libraries
+        run: bash .github/scripts/build-android.sh native
+
+      - name: Build ${{ matrix.flavor }} ${{ matrix.build_type }} APK
+        run: bash .github/scripts/build-android.sh apk
+      
+      - name: Find APK
+        id: find_apk
+        run: |
+          mapfile -t apks < <(find app/build/outputs/apk/publicLatestArm64/release -name '*.apk' -type f)
+          if [ "${#apks[@]}" -ne 1 ]; then
+            echo "Expected exactly one arm64 release APK" >&2
+            exit 1
+          fi
+          APK_PATH=${apks[0]}
+          APK_NAME=$(basename "$APK_PATH")
+          echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
+          echo "apk_name=$APK_NAME" >> $GITHUB_OUTPUT
+          
+          # Calculate checksums
+          SHA256=$(sha256sum "$APK_PATH" | awk '{print $1}')
+          echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+
+      - name: Verify release signature, TDLib and profiles
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          APK_PATH: ${{ steps.find_apk.outputs.apk_path }}
+        run: |
+          set -euo pipefail
+          certificate=$(keytool -exportcert -keystore release.keystore \
+            -alias "$KEY_ALIAS" -storepass:env KEYSTORE_PASSWORD | sha256sum | awk '{print $1}')
+          build_tools=$(./scripts/read-property.sh version.properties version.build_tools)
+          python3 scripts/verify-release.py "$APK_PATH" \
+            --build-tools "/usr/local/lib/android/sdk/build-tools/$build_tools" \
+            --edition public --expected-package com.pulsargram.x \
+            --expected-certificate "$certificate"
+      
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: apk-${{ matrix.flavor }}-${{ matrix.build_type }}
+          path: ${{ steps.find_apk.outputs.apk_path }}
+          retention-days: 1
+      
+      - name: Upload mapping file
+        if: matrix.build_type == 'Release'
+        uses: actions/upload-artifact@v5
+        with:
+          name: mapping-${{ matrix.flavor }}-${{ matrix.build_type }}
+          path: app/build/outputs/mapping/publicLatestArm64Release/*.txt
+          retention-days: 90
+          if-no-files-found: ignore
+
+  publish:
+    name: Publish to Telegram
+    needs: build
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_to_telegram)
+    
+    env:
+      # Force Node.js 24 for all actions to avoid deprecation warnings
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      
+      - name: Check Telegram configuration
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+        run: |
+          python3 - <<'PY'
+          import importlib.util
+          import os
+          spec = importlib.util.spec_from_file_location('uploader', '.github/scripts/upload_to_telegram.py')
+          uploader = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(uploader)
+          try:
+              uploader.upload_configuration(os.environ)
+          except uploader.ConfigurationError as error:
+              raise SystemExit(str(error))
+          PY
+
+      - name: Download verified APK artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+          pattern: apk-*
+      
+      - name: Send to Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+        run: |
+          # Install Telethon for large file uploads
+          pip install telethon==1.45.0
+          
+          APK_FILES=()
+          
+          # Find all APK files in artifacts directory (handles both flat and nested structures)
+          while IFS= read -r -d '' apk; do
+            echo "Found file: $apk"
+            if [ -f "$apk" ]; then
+              APK_FILES+=("$apk")
+              echo "Added to upload queue: $apk"
+            fi
+          done < <(find artifacts -name "*.apk" -type f -print0)
+          
+          echo "=== Total APKs found: ${#APK_FILES[@]} ==="
+          
+          if [ ${#APK_FILES[@]} -eq 0 ]; then
+            echo "❌ No APK files found to upload!"
+            exit 1
+          fi
+          
+          for apk in "${APK_FILES[@]}"; do
+            apk_name=$(basename "$apk")
+            
+            echo "Uploading $apk_name to Telegram..."
+            python3 .github/scripts/upload_to_telegram.py "$apk"
+            
+            # Rate limiting
+            sleep 2
+          done
+          
+          echo "✅ All ${#APK_FILES[@]} APK(s) uploaded successfully!"
+
+      - name: Update Telegram success marker
+        if: |
+          (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')) ||
+          (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'))
+        env:
+          SUCCESS_MARKER: telegram-last-success
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git tag --force "$SUCCESS_MARKER" "${{ github.sha }}"
+          git push --force origin "refs/tags/$SUCCESS_MARKER"
+
+  create_release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
+    
+    env:
+      # Force Node.js 24 for all actions to avoid deprecation warnings
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+      
+      - name: Prepare release info
+        id: release_info
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG_NAME="${{ github.ref_name }}"
+            PRERELEASE="false"
+          else
+            TAG_NAME="latest-${{ github.sha }}"
+            PRERELEASE="true"
+          fi
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "prerelease=$PRERELEASE" >> $GITHUB_OUTPUT
+      
+      - name: Create tag for branch push
+        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git tag -a ${{ steps.release_info.outputs.tag_name }} -m "Automated release from ${{ github.ref_name }}"
+          git push origin ${{ steps.release_info.outputs.tag_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_info.outputs.tag_name }}
+          files: artifacts/apk-*-Release/*.apk
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ steps.release_info.outputs.prerelease }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  cleanup_apk_artifacts:
+    name: Remove temporary APK artifacts
+    needs: [build, publish, create_release]
+    runs-on: ubuntu-latest
+    if: ${{ always() && needs.build.result == 'success' && needs.create_release.result == 'success' }}
+    permissions:
+      actions: write
+    steps:
+      - name: Remove APK copied to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.name | startswith("apk-")) | .id' |
+            while read -r artifact_id; do
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id"
+            done

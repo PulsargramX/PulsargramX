@@ -1,0 +1,46 @@
+.DS_Store
+
+.gradle
+.kotlin
+.idea
+.kiro
+
+build
+.cxx
+.externalNativeBuild
+obj
+
+*.apk
+*.iml
+
+/builds
+
+/captures
+/local.properties
+
+libc++_shared.so
+
+# GitHub Actions secrets helper output
+.github/github-secrets.txt
+
+# Python virtual environments
+__pycache__/
+venv/
+*.session
+*.session-journal
+
+# Local coding-agent instructions
+AGENTS.md
+.codex/skills/update-telegram-x/
+
+# Local personal variant, credentials and branding
+/.personal/
+/.public-repo/
+/keystore.properties
+/release.keystore
+
+# Per-edition Firebase configuration and generated release output
+/app/google-services.json
+/app/src/personal/
+/app/src/public/google-services.json
+/app/latestArm64/

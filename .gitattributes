@@ -1,0 +1,4 @@
+app/jniLibs/*/*.so filter=lfs diff=lfs merge=lfs -text
+*.zip -delta
+# Unified diffs preserve the leading space on blank context lines.
+patches/tdlib/*.patch whitespace=-blank-at-eol,-blank-at-eof
