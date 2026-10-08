@@ -23,7 +23,6 @@ import android.widget.TextView;
 import androidx.recyclerview.widget.RecyclerView;
 
 import org.drinkless.tdlib.TdApi;
-import org.thunderdog.challegram.FillingDrawable;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.navigation.ViewController;
@@ -39,7 +38,7 @@ import me.vkryl.core.lambda.Destroyable;
 
 public class ChatBoostSlotView extends LinearLayout implements Destroyable {
   private final AvatarView avatar;
-  private final ImageView available, state;
+  private final ImageView state;
   private final CheckBoxView checkbox;
   private final TextView title, detail;
   private boolean selected;
@@ -57,15 +56,6 @@ public class ChatBoostSlotView extends LinearLayout implements Destroyable {
     avatar = new AvatarView(getContext());
     avatar.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
     addView(avatar, new LayoutParams(Screen.dp(44f), Screen.dp(44f)));
-    available = new ImageView(getContext());
-    available.setImageResource(R.drawable.baseline_flash_on_24);
-    available.setColorFilter(Theme.getColor(ColorId.fillingPositiveContent));
-    available.setBackground(new FillingDrawable(ColorId.fillingPositive, 22f));
-    available.setPadding(Screen.dp(10f), Screen.dp(10f), Screen.dp(10f), Screen.dp(10f));
-    available.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
-    controller.addThemeFilterListener(available, ColorId.fillingPositiveContent);
-    controller.addThemeInvalidateListener(available);
-    addView(available, new LayoutParams(Screen.dp(44f), Screen.dp(44f)));
 
     LinearLayout text = new LinearLayout(getContext());
     text.setOrientation(VERTICAL);
@@ -94,30 +84,23 @@ public class ChatBoostSlotView extends LinearLayout implements Destroyable {
     addView(state, new LayoutParams(Screen.dp(24f), Screen.dp(24f)));
   }
 
-  public void setSlot (Tdlib tdlib, TdApi.ChatBoostSlot slot, long targetChatId,
+  public void setSlot (Tdlib tdlib, TdApi.ChatBoostSlot slot,
                        boolean selected, boolean usable, boolean busy) {
     this.selected = selected;
-    boolean assigned = slot.currentlyBoostedChatId != 0;
-    boolean applied = targetChatId != 0 && slot.currentlyBoostedChatId == targetChatId;
     boolean cooling = slot.cooldownUntilDate > tdlib.currentTime(TimeUnit.SECONDS);
-    avatar.setVisibility(assigned ? VISIBLE : GONE);
-    avatar.setChat(tdlib, assigned ? tdlib.chat(slot.currentlyBoostedChatId) : null);
-    available.setVisibility(assigned ? GONE : VISIBLE);
-    title.setText(assigned ? tdlib.chatTitle(slot.currentlyBoostedChatId) :
-      Lang.getString(R.string.ChatBoostUnused));
+    avatar.setChat(tdlib, tdlib.chat(slot.currentlyBoostedChatId));
+    title.setText(tdlib.chatTitle(slot.currentlyBoostedChatId));
     String expiry = Lang.getString(R.string.ChatBoostExpires,
       Lang.getDate(slot.expirationDate, TimeUnit.SECONDS));
-    CharSequence subtitle = applied ? Lang.getString(R.string.ChatBoostAlreadyApplied) :
-      cooling ? Lang.getString(R.string.ChatBoostAvailableFrom,
+    CharSequence subtitle = cooling ? Lang.getString(R.string.ChatBoostAvailableFrom,
         Lang.getTimestamp(slot.cooldownUntilDate, TimeUnit.SECONDS)) :
-      assigned && targetChatId != 0 ? Lang.getString(R.string.ChatBoostCanReassign) : null;
-    detail.setText(subtitle == null ? expiry : subtitle + "\n" + expiry);
-    checkbox.setVisibility(targetChatId != 0 && usable ? VISIBLE : GONE);
+      Lang.getString(R.string.ChatBoostCanReassign);
+    detail.setText(subtitle + "\n" + expiry);
+    checkbox.setVisibility(usable ? VISIBLE : GONE);
     checkbox.setChecked(selected, false);
-    state.setVisibility((targetChatId == 0 && assigned) || applied || cooling ? VISIBLE : GONE);
-    state.setImageResource(applied ? R.drawable.baseline_check_circle_24 :
-      cooling ? R.drawable.baseline_schedule_24 : R.drawable.baseline_arrow_forward_24);
-    setEnabled(!busy && (targetChatId == 0 ? assigned : usable));
+    state.setVisibility(cooling ? VISIBLE : GONE);
+    state.setImageResource(R.drawable.baseline_schedule_24);
+    setEnabled(!busy && usable);
     setContentDescription(title.getText() + ", " + detail.getText());
   }
 

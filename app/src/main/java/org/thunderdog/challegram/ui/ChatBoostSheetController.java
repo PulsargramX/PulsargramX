@@ -81,6 +81,9 @@ public class ChatBoostSheetController extends
   protected void setupPopupLayout (PopupLayout popupLayout) {
     super.setupPopupLayout(popupLayout);
     popupLayout.setBoundController(this);
+    if (getArgumentsStrict().reassign) {
+      popupLayout.setDismissOtherPopUps(false);
+    }
   }
 
   boolean isShowing () {

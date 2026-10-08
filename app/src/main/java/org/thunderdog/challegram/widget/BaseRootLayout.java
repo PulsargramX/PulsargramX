@@ -15,7 +15,11 @@
 package org.thunderdog.challegram.widget;
 
 import android.content.Context;
+import android.graphics.Canvas;
 import android.view.MotionEvent;
+import android.view.View;
+
+import androidx.annotation.Nullable;
 
 import org.thunderdog.challegram.component.preview.FlingDetector;
 import org.thunderdog.challegram.navigation.ViewController;
@@ -28,6 +32,32 @@ public class BaseRootLayout extends RootFrameLayout implements FlingDetector.Cal
   public BaseRootLayout (Context context) {
     super(context);
     detector = new FlingDetector(context, this);
+  }
+
+  private View backStatusBar;
+
+  public void setBackStatusBar (@Nullable View statusBar) {
+    if (backStatusBar != statusBar) {
+      backStatusBar = statusBar;
+      invalidate();
+    }
+  }
+
+  public void drawBackStatusBar (Canvas canvas, long drawingTime) {
+    if (backStatusBar != null && (backStatusBar.getVisibility() == VISIBLE ||
+        backStatusBar.getAnimation() != null)) {
+      super.drawChild(canvas, backStatusBar, drawingTime);
+    }
+  }
+
+  @Override
+  protected boolean drawChild (Canvas canvas, View child, long drawingTime) {
+    // Navigation draws the status strip inside its moving surfaces during predictive back.
+    // Keep the view attached here so connection updates and inset handling continue normally.
+    if (child == backStatusBar) {
+      return false;
+    }
+    return super.drawChild(canvas, child, drawingTime);
   }
 
   @Override

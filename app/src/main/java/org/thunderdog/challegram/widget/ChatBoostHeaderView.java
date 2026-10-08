@@ -177,16 +177,15 @@ public class ChatBoostHeaderView extends LinearLayout implements Destroyable {
     description.setText(message);
   }
 
-  public void setPersonal (int total, int available) {
+  public void setReassignment (Tdlib tdlib, long chatId) {
     progress.setVisibility(GONE);
     emblem.setVisibility(VISIBLE);
-    chat.setVisibility(GONE);
-    title.setText(Lang.getString(R.string.MyChatBoosts));
-    description.setText(Lang.getString(R.string.ChatBoostMyInfo));
-    applied.setVisibility(total > 0 ? VISIBLE : GONE);
-    applied.setText(Lang.getString(R.string.ChatBoostSlotSummary,
-      Lang.plural(R.string.ChatBoostCount, total),
-      Lang.plural(R.string.ChatBoostAvailableCount, available)));
+    chat.setVisibility(VISIBLE);
+    avatar.setChat(tdlib, tdlib.chat(chatId));
+    chatTitle.setText(tdlib.chatTitle(chatId));
+    title.setText(Lang.getString(R.string.ChatBoostReassign));
+    description.setText(Lang.getString(R.string.ChatBoostSelectInfo, tdlib.chatTitle(chatId)));
+    applied.setVisibility(GONE);
   }
 
   @Override

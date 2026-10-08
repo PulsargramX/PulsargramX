@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise predictive back geometry and device corners without an Android APK."""
+"""Exercise predictive back geometry, chrome and cleanup without an Android APK."""
 
 from pathlib import Path
 import shutil
@@ -12,6 +12,269 @@ from message_options_keyboard_source_test import java_method, read
 
 @unittest.skipUnless(shutil.which("javac") and shutil.which("java"), "Requires a JDK")
 class PredictiveBackBehaviorTest(unittest.TestCase):
+    def test_status_strip_follows_surfaces_and_restores(self) -> None:
+        root = read("app/src/main/java/org/thunderdog/challegram/navigation/RootLayout.java")
+        parent = read("app/src/main/java/org/thunderdog/challegram/widget/BaseRootLayout.java")
+        root_methods = "\n".join(java_method(root, signature) for signature in (
+            "boolean prepareBackHeader (", "private void clearBackHeader ()",
+            "void setBackPreview (", "void clearBackPreview ()", "protected void dispatchDraw (",
+            "protected boolean drawChild (", "private void drawBackStatusBar (",
+            "private int saveBackSurface (", "private void drawBackContent (",
+        ))
+        parent_methods = "\n".join(java_method(parent, signature) for signature in (
+            "public void setBackStatusBar (", "public void drawBackStatusBar (",
+            "protected boolean drawChild (",
+        ))
+        harness = r"""
+import java.util.*;
+public class StatusStripTest {
+  @interface Nullable {}
+  static class RectF {
+    float left, top, right, bottom;
+    RectF() {}
+    RectF(float l, float t, float r, float b) { set(l,t,r,b); }
+    void set(float l, float t, float r, float b) { left=l; top=t; right=r; bottom=b; }
+    void set(RectF r) { set(r.left,r.top,r.right,r.bottom); }
+    void setEmpty() { set(0,0,0,0); }
+    boolean isEmpty() { return right<=left || bottom<=top; }
+    float width() { return right-left; }
+    float height() { return bottom-top; }
+  }
+  static class Path {
+    enum Direction { CW }
+    RectF bounds = new RectF();
+    void rewind() {}
+    void addRoundRect(RectF rect, float[] radii, Direction direction) { bounds.set(rect); }
+  }
+  static class Paint { int color; void setColor(int value) { color=value; } }
+  static class Color {
+    static int argb(int a, int r, int g, int b) { return a<<24 | r<<16 | g<<8 | b; }
+  }
+  static class Theme {
+    static boolean dark;
+    static boolean isDark() { return dark; }
+    static int backgroundColor() { return -1; }
+  }
+  static class State {
+    float x, y, sx=1, sy=1, alpha=1;
+    RectF clip;
+    State copy() {
+      State s = new State();
+      s.x=x; s.y=y; s.sx=sx; s.sy=sy; s.alpha=alpha; s.clip=clip;
+      return s;
+    }
+  }
+  record Draw(String name, RectF bounds, RectF clip, float alpha) {}
+  static class Canvas {
+    static final int ALL_SAVE_FLAG=31;
+    State state = new State();
+    List<State> stack = new ArrayList<>();
+    List<Draw> draws = new ArrayList<>();
+    int save() { stack.add(state.copy()); return stack.size(); }
+    int saveLayerAlpha(float l, float t, float r, float b, int alpha, int flags) {
+      int count=save(); state.alpha*=alpha/255f; return count;
+    }
+    void restoreToCount(int count) {
+      state=stack.get(count-1);
+      stack.subList(count-1,stack.size()).clear();
+    }
+    void translate(float x, float y) { state.x+=x*state.sx; state.y+=y*state.sy; }
+    void scale(float x, float y) { state.sx*=x; state.sy*=y; }
+    void concat(Object matrix) {}
+    void clipPath(Path path) { state.clip=new RectF(); state.clip.set(path.bounds); }
+    void drawColor(int color) {}
+    void drawRect(float l, float t, float r, float b, Paint paint) {
+      if ((paint.color & 0xffffff)==0) {
+        draws.add(new Draw("dim",new RectF(l,t,r,b),state.clip,(paint.color>>>24)/255f));
+      }
+    }
+    void strip(String name, float width, float height) {
+      draws.add(new Draw(name,new RectF(state.x,state.y,
+        state.x+width*state.sx,state.y+height*state.sy),state.clip,state.alpha));
+    }
+  }
+  static class View {
+    static final int VISIBLE=0, GONE=8;
+    int width=1000, height=60, visibility=VISIBLE, left, top, windowX, windowY;
+    float alpha=1;
+    boolean failCapture;
+    View parent;
+    int getWidth() { return width; }
+    int getHeight() { return height; }
+    int getLeft() { return left; }
+    int getTop() { return top; }
+    int getScrollX() { return 0; }
+    int getScrollY() { return 0; }
+    int getVisibility() { return visibility; }
+    float getAlpha() { return alpha; }
+    Object getAnimation() { return null; }
+    Object getMatrix() { return null; }
+    View getParent() { return parent; }
+    void getLocationInWindow(int[] location) { location[0]=windowX; location[1]=windowY; }
+    void draw(Canvas canvas) {}
+  }
+  static class Frame extends View {
+    List<View> children = new ArrayList<>();
+    int invalidations;
+    void invalidate() { invalidations++; }
+    void add(View view) { children.add(view); view.parent=this; }
+    long getDrawingTime() { return 123; }
+    protected boolean drawChild(Canvas canvas, View child, long time) {
+      int save=canvas.save();
+      canvas.translate(child.left,child.top); canvas.state.alpha*=child.alpha;
+      child.draw(canvas); canvas.restoreToCount(save); return true;
+    }
+    protected void dispatchDraw(Canvas canvas) {
+      for (View child : children) if (child.visibility==VISIBLE) drawChild(canvas,child,123);
+    }
+    public void draw(Canvas canvas) { dispatchDraw(canvas); }
+  }
+  static class NetworkStatusBarView extends View {
+    String text="connected";
+    public void draw(Canvas canvas) { canvas.strip("live:"+text,width,height); }
+  }
+  static class HeaderView extends View {}
+  static class FloatingButton extends View {}
+  static class NavigationLayout extends View {
+    void drawBackContent(Canvas c, View preview, boolean foreground, long time) {}
+  }
+  static class BackSnapshot {
+    final View view;
+    final String text;
+    BackSnapshot(View view) {
+      if (view.failCapture) throw new OutOfMemoryError("Simulated capture failure");
+      this.view=view;
+      text=view instanceof NetworkStatusBarView ? ((NetworkStatusBarView)view).text : null;
+    }
+    void draw(Canvas canvas) {
+      if (text!=null) canvas.strip("snapshot:"+text,view.width,view.height);
+    }
+  }
+  static class Activity {
+    NetworkStatusBarView bar;
+    NetworkStatusBarView getNetworkStatusBar() { return bar; }
+  }
+  static class UI { static Activity getContext(Activity context) { return context; } }
+  static class Log { static void w(String message, Throwable error) {} }
+  static class BaseRootLayout extends Frame {
+    View backStatusBar;
+    __PARENT_METHODS__
+  }
+  static class RootLayout extends Frame {
+    View backPreview;
+    NavigationLayout backPreviewParent;
+    RectF backClosingRect=new RectF(), backEnteringRect=new RectF();
+    float[] backCornerRadii=new float[8], backScaledCornerRadii=new float[8];
+    float backForegroundAlpha=1, backDimFactor;
+    int backHeaderColor;
+    HeaderView backHeader;
+    FloatingButton backFloatingButton;
+    BackSnapshot backHeaderSnapshot, backFloatingButtonSnapshot, backStatusBarSnapshot;
+    BaseRootLayout backStatusBarParent;
+    int backStatusBarOffsetX, backStatusBarOffsetY;
+    Path backClip=new Path();
+    Paint backPaint=new Paint();
+    Activity activity=new Activity();
+    RootLayout() { height=2000; }
+    Activity getContext() { return activity; }
+    void prepareBackCorners() {}
+    __ROOT_METHODS__
+  }
+  static void check(boolean value, String message) {
+    if (!value) throw new AssertionError(message);
+  }
+  static void close(float actual, float expected) {
+    check(Math.abs(actual-expected)<.01f,actual+" != "+expected);
+  }
+  public static void main(String[] args) {
+    BaseRootLayout parent=new BaseRootLayout();
+    RootLayout root=new RootLayout();
+    NetworkStatusBarView bar=new NetworkStatusBarView();
+    root.activity.bar=bar;
+    parent.add(root); parent.add(bar);
+    HeaderView header=new HeaderView();
+    FloatingButton floating=new FloatingButton(); floating.visibility=View.GONE;
+    root.add(header); root.add(floating);
+    NavigationLayout content=new NavigationLayout(); root.add(content);
+    View preview=new View(); preview.parent=content;
+    Canvas normal=new Canvas(); parent.draw(normal);
+    check(normal.draws.size()==1,"One status strip before gesture");
+    close(normal.draws.get(0).bounds().top,0);
+
+    check(root.prepareBackHeader(header,floating),"Capture chrome");
+    check(parent.invalidations==1,"Invalidate standalone status drawing when borrowing it");
+    check(bar.parent==parent && bar.alpha==1 && bar.visibility==View.VISIBLE,
+      "Preserve ownership, visibility and alpha");
+    RectF closing=new RectF(50,100,900,1800), entering=new RectF(-150,100,700,1800);
+    root.setBackPreview(preview,closing,entering,0x112233,1,1);
+    bar.text="connecting";
+    Canvas gesture=new Canvas(); parent.draw(gesture);
+    check(gesture.draws.size()==3,"Two moving status strips and one destination dim");
+    Draw destination=gesture.draws.get(0), dim=gesture.draws.get(1), outgoing=gesture.draws.get(2);
+    check(destination.name().equals("live:connecting"),"Destination stays live");
+    check(outgoing.name().equals("snapshot:connected"),"Preserve outgoing chrome");
+    close(destination.bounds().top,100); close(outgoing.bounds().top,100);
+    close(outgoing.bounds().left,50); close(outgoing.bounds().right,900);
+    close(outgoing.bounds().bottom,151);
+    check(destination.clip().left==entering.left && outgoing.clip().left==closing.left,
+      "Use each surface's rounded clip");
+    close(dim.alpha(),.2f); close(outgoing.alpha(),1);
+
+    Theme.dark=true;
+    Canvas dark=new Canvas(); parent.draw(dark);
+    close(dark.draws.get(1).alpha(),.8f);
+    close(dark.draws.get(2).bounds().top,100);
+    Theme.dark=false;
+    root.setBackPreview(preview,closing,entering,0x112233,.4f,.5f);
+    Canvas fading=new Canvas(); parent.draw(fading);
+    close(fading.draws.get(2).alpha(),.4f); close(fading.draws.get(1).alpha(),26/255f);
+    root.setBackPreview(preview,closing,entering,0x112233,0,0);
+    Canvas committed=new Canvas(); parent.draw(committed);
+    check(committed.draws.size()==2,"Status strip survives on destination after foreground fades");
+    close(committed.draws.get(0).bounds().top,100);
+    root.clearBackPreview();
+    root.clearBackPreview();
+    Canvas restored=new Canvas(); parent.draw(restored);
+    check(restored.draws.size()==1 && restored.draws.get(0).name().equals("live:connecting"),
+      "Cleanup restores live strip exactly once");
+    close(restored.draws.get(0).bounds().top,0);
+    check(parent.backStatusBar==null && root.backStatusBarSnapshot==null,
+      "Release rendering ownership and captured pixels");
+    check(parent.invalidations==2,"Invalidate restoration once, even with repeated cleanup");
+
+    root.windowX=20; root.windowY=40;
+    check(root.prepareBackHeader(header,floating),"Recapture at offset origin");
+    root.setBackPreview(preview,closing,entering,0x112233,1,1);
+    Canvas offset=new Canvas(); parent.draw(offset);
+    close(offset.draws.get(0).bounds().top,100-40*.85f);
+    close(offset.draws.get(2).bounds().left,50-20*.85f);
+    bar.failCapture=true;
+    check(!root.prepareBackHeader(header,floating),"Capture failure falls back safely");
+    check(parent.backStatusBar==null && root.backStatusBarSnapshot==null,
+      "Failed or interrupted preparation restores standalone drawing");
+    root.clearBackPreview();
+    root.activity.bar=null;
+    check(root.prepareBackHeader(header,floating),"Missing status strip remains supported");
+    root.clearBackPreview();
+  }
+}
+"""
+        harness = (harness.replace("__ROOT_METHODS__", root_methods)
+                   .replace("__PARENT_METHODS__", parent_methods))
+        with tempfile.TemporaryDirectory(prefix="predictive-back-status-test-") as directory:
+            java = Path(directory) / "StatusStripTest.java"
+            java.write_text(harness, encoding="utf-8")
+            result = subprocess.run(
+                ["javac", "--release", "17", "-d", directory, str(java)],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            result = subprocess.run(
+                ["java", "-cp", directory, "StatusStripTest"],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_gesture_settlement_and_device_corners(self) -> None:
         animation = read(
             "app/src/main/java/org/thunderdog/challegram/navigation/PredictiveBackAnimation.java"

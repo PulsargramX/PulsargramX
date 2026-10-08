@@ -30,7 +30,6 @@ import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.data.DoubleTextWrapper;
 import org.thunderdog.challegram.support.RippleSupport;
 import org.thunderdog.challegram.support.ViewSupport;
-import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibCache;
 import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
@@ -62,15 +61,20 @@ public class ChatBoostController extends
     implements View.OnClickListener, TdlibCache.SupergroupDataChangeListener {
   public static class Args {
     public final long chatId;
+    final boolean reassign;
+    final Runnable onBoostApplied;
 
     public Args (long chatId) {
-      this.chatId = chatId;
+      this(chatId, false, null);
     }
-  }
 
-  public ChatBoostController (Context context, Tdlib tdlib) {
-    super(context, tdlib);
-    sheet = null;
+    private Args (long chatId, boolean reassign, Runnable onBoostApplied) {
+      if (chatId == 0)
+        throw new IllegalArgumentException();
+      this.chatId = chatId;
+      this.reassign = reassign;
+      this.onBoostApplied = onBoostApplied;
+    }
   }
 
   public ChatBoostController (ChatBoostSheetController sheet) {
@@ -105,8 +109,12 @@ public class ChatBoostController extends
     return getArgumentsStrict().chatId;
   }
 
+  private boolean isReassignment () {
+    return getArgumentsStrict().reassign;
+  }
+
   private boolean canViewBoosters () {
-    return chatId() != 0 && tdlib.isAdminOrOwner(chatId());
+    return !isReassignment() && tdlib.isAdminOrOwner(chatId());
   }
 
   @Override
@@ -116,7 +124,7 @@ public class ChatBoostController extends
 
   @Override
   public CharSequence getName () {
-    return Lang.getString(chatId() != 0 ? R.string.ChatBoosts : R.string.MyChatBoosts);
+    return Lang.getString(isReassignment() ? R.string.ChatBoostReassign : R.string.ChatBoosts);
   }
 
   @Override
@@ -126,7 +134,7 @@ public class ChatBoostController extends
 
   @Override
   protected boolean needContentBackground () {
-    return sheet == null;
+    return false;
   }
 
   @Override
@@ -136,7 +144,7 @@ public class ChatBoostController extends
 
   @Override
   public boolean needsTempUpdates () {
-    return sheet != null || super.needsTempUpdates();
+    return true;
   }
 
   void onSheetShown () {
@@ -145,7 +153,7 @@ public class ChatBoostController extends
 
   @Override
   protected boolean needRecyclerBottomInset () {
-    return sheet == null;
+    return false;
   }
 
   @Override
@@ -158,28 +166,26 @@ public class ChatBoostController extends
   @Override
   protected View onCreateView (Context context) {
     View view = super.onCreateView(context);
-    if (sheet != null) {
-      bottomBar = new FrameLayoutFix(context);
-      ViewSupport.setThemedBackground(bottomBar, ColorId.filling, this);
-      boostButton = new TextView(context);
-      boostButton.setTextSize(16f);
-      boostButton.setTypeface(Fonts.getRobotoMedium());
-      boostButton.setTextColor(Theme.getColor(ColorId.fillingPositiveContent));
-      addThemeTextColorListener(boostButton, ColorId.fillingPositiveContent);
-      boostButton.setGravity(Gravity.CENTER);
-      boostButton.setSingleLine();
-      boostButton.setEllipsize(TextUtils.TruncateAt.END);
-      boostButton.setPadding(Screen.dp(16f), 0, Screen.dp(16f), 0);
-      boostButton.setId(R.id.btn_applyChatBoost);
-      boostButton.setOnClickListener(this);
-      RippleSupport.setSimpleWhiteBackground(boostButton, ColorId.fillingPositive, 6f, this);
-      bottomBar.addView(boostButton, FrameLayoutFix.newParams(
-        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-      ((FrameLayout) view).addView(bottomBar, FrameLayoutFix.newParams(
-        ViewGroup.LayoutParams.MATCH_PARENT, Screen.dp(76f), Gravity.BOTTOM));
-      updateBottomBar();
-      updateBoostButton();
-    }
+    bottomBar = new FrameLayoutFix(context);
+    ViewSupport.setThemedBackground(bottomBar, ColorId.filling, this);
+    boostButton = new TextView(context);
+    boostButton.setTextSize(16f);
+    boostButton.setTypeface(Fonts.getRobotoMedium());
+    boostButton.setTextColor(Theme.getColor(ColorId.fillingPositiveContent));
+    addThemeTextColorListener(boostButton, ColorId.fillingPositiveContent);
+    boostButton.setGravity(Gravity.CENTER);
+    boostButton.setSingleLine();
+    boostButton.setEllipsize(TextUtils.TruncateAt.END);
+    boostButton.setPadding(Screen.dp(16f), 0, Screen.dp(16f), 0);
+    boostButton.setId(R.id.btn_applyChatBoost);
+    boostButton.setOnClickListener(this);
+    RippleSupport.setSimpleWhiteBackground(boostButton, ColorId.fillingPositive, 6f, this);
+    bottomBar.addView(boostButton, FrameLayoutFix.newParams(
+      ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    ((FrameLayout) view).addView(bottomBar, FrameLayoutFix.newParams(
+      ViewGroup.LayoutParams.MATCH_PARENT, Screen.dp(76f), Gravity.BOTTOM));
+    updateBottomBar();
+    updateBoostButton();
     return view;
   }
 
@@ -229,9 +235,7 @@ public class ChatBoostController extends
 
   @Override
   protected void onCreateView (Context context, CustomRecyclerView recyclerView) {
-    if (chatId() != 0) {
-      tdlib.cache().subscribeToSupergroupUpdates(ChatId.toSupergroupId(chatId()), this);
-    }
+    tdlib.cache().subscribeToSupergroupUpdates(ChatId.toSupergroupId(chatId()), this);
     adapter = new SettingsAdapter(this) {
       @Override
       public int measureScrollTop (int position) {
@@ -271,7 +275,7 @@ public class ChatBoostController extends
         switch (customViewType) {
           case CELL_HEADER:
             view = new ChatBoostHeaderView(ChatBoostController.this,
-              sheet != null ? () -> sheet.hidePopupWindow(true) : null);
+              () -> sheet.hidePopupWindow(true));
             break;
           case CELL_LEVEL:
             view = new ChatBoostLevelView(ChatBoostController.this);
@@ -300,14 +304,14 @@ public class ChatBoostController extends
         switch (customViewType) {
           case CELL_HEADER: {
             ChatBoostHeaderView header = (ChatBoostHeaderView) view;
-            if (chatId() != 0) {
+            if (!isReassignment()) {
               header.setChat(tdlib, chatId(), status);
               if (status == null) {
                 header.setMessage(Lang.getString(loadFailed ?
                   R.string.ChatBoostLoadFailed : R.string.ChatBoostLoading));
               }
             } else {
-              header.setPersonal(activeSlotCount(), unusedSlotCount());
+              header.setReassignment(tdlib, chatId());
             }
             break;
           }
@@ -317,8 +321,9 @@ public class ChatBoostController extends
             break;
           case CELL_SLOT: {
             TdApi.ChatBoostSlot slot = (TdApi.ChatBoostSlot) item.getData();
-            ((ChatBoostSlotView) view).setSlot(tdlib, slot, chatId(),
-              selectedSlots.contains(slot.slotId), isUsable(slot), applying || pendingLoads != 0);
+            ((ChatBoostSlotView) view).setSlot(tdlib, slot,
+              selectedSlots.contains(slot.slotId), isUsable(slot),
+              applying || pendingLoads != 0 || slotsFailed || loadFailed);
             break;
           }
           case CELL_LINK:
@@ -334,7 +339,7 @@ public class ChatBoostController extends
     recyclerView.setItemAnimator(null);
     recyclerView.setOverScrollMode(View.OVER_SCROLL_NEVER);
     recyclerView.setAdapter(adapter);
-    if (chatId() != 0) {
+    if (!isReassignment()) {
       tdlib.cache().supergroupFull(ChatId.toSupergroupId(chatId()),
         fullInfo -> runOnUiThreadOptional(this::buildCells));
     }
@@ -360,9 +365,7 @@ public class ChatBoostController extends
   @Override
   public void destroy () {
     removeCallbacks(updateSlots);
-    if (chatId() != 0) {
-      tdlib.cache().unsubscribeFromSupergroupUpdates(ChatId.toSupergroupId(chatId()), this);
-    }
+    tdlib.cache().unsubscribeFromSupergroupUpdates(ChatId.toSupergroupId(chatId()), this);
     super.destroy();
   }
 
@@ -385,46 +388,35 @@ public class ChatBoostController extends
   private void refresh () {
     if (adapter == null || pendingLoads != 0 || applying)
       return;
-    pendingLoads = chatId() != 0 ? 2 : 1;
+    pendingLoads = 2;
     loadFailed = slotsFailed = false;
-    if (chatId() != 0) {
-      if (features.isEmpty() || featuresFailed) {
-        loadFeatures();
-      }
-      tdlib.send(new TdApi.GetChatBoostStatus(chatId()), (result, error) ->
-        runOnUiThreadOptional(() -> {
-          if (error != null) {
-            loadFailed = true;
-            UI.showError(error);
-          } else {
-            status = result;
-            loadLevelFeatures();
-            if (canViewBoosters() && !listLoaded && !listLoading) {
-              loadBoosters();
-            }
-          }
-          pendingLoads--;
-          buildCells();
-        })
-      );
+    if (features.isEmpty() || featuresFailed) {
+      loadFeatures();
     }
+    tdlib.send(new TdApi.GetChatBoostStatus(chatId()), (result, error) ->
+      runOnUiThreadOptional(() -> {
+        if (error != null) {
+          loadFailed = true;
+          UI.showError(error);
+        } else {
+          status = result;
+          loadLevelFeatures();
+          if (canViewBoosters() && !listLoaded && !listLoading) {
+            loadBoosters();
+          }
+        }
+        pendingLoads--;
+        buildCells();
+      })
+    );
     tdlib.send(new TdApi.GetAvailableChatBoostSlots(), (result, error) ->
       runOnUiThreadOptional(() -> {
         if (error != null) {
           slotsFailed = true;
           UI.showError(error);
         } else {
-          boolean firstLoad = slots == null;
           slots = result.slots;
           selectedSlots.removeIf(id -> findUsableSlot(id) == null);
-          if (firstLoad && chatId() != 0) {
-            for (TdApi.ChatBoostSlot slot : slots) {
-              if (slot.currentlyBoostedChatId == 0 && isUsable(slot)) {
-                selectedSlots.add(slot.slotId);
-                break;
-              }
-            }
-          }
         }
         pendingLoads--;
         buildCells();
@@ -434,7 +426,7 @@ public class ChatBoostController extends
   }
 
   private void loadFeatures () {
-    if (featuresLoading || chatId() == 0)
+    if (featuresLoading || isReassignment())
       return;
     featuresLoading = true;
     featuresFailed = false;
@@ -454,7 +446,7 @@ public class ChatBoostController extends
   }
 
   private void loadLevelFeatures () {
-    if (status == null)
+    if (status == null || isReassignment())
       return;
     for (int level = status.level; level <= status.level + 1; level++) {
       if ((level > status.level && status.nextLevelBoostCount == 0) ||
@@ -478,7 +470,8 @@ public class ChatBoostController extends
   private boolean isUsable (TdApi.ChatBoostSlot slot) {
     long now = tdlib.currentTime(TimeUnit.SECONDS);
     return slot.expirationDate > now && slot.cooldownUntilDate <= now &&
-      slot.currentlyBoostedChatId != chatId();
+      slot.currentlyBoostedChatId != chatId() &&
+      (!isReassignment() || slot.currentlyBoostedChatId != 0);
   }
 
   private TdApi.ChatBoostSlot findUsableSlot (int slotId) {
@@ -515,40 +508,43 @@ public class ChatBoostController extends
     return item;
   }
 
-  private int activeSlotCount () {
-    int count = 0;
+  private TdApi.ChatBoostSlot unusedSlot () {
+    if (slots != null) {
+      for (TdApi.ChatBoostSlot slot : slots) {
+        if (slot.currentlyBoostedChatId == 0 && isUsable(slot))
+          return slot;
+      }
+    }
+    return null;
+  }
+
+  private List<TdApi.ChatBoostSlot> reassignmentSlots () {
+    List<TdApi.ChatBoostSlot> result = new ArrayList<>();
     if (slots != null) {
       long now = tdlib.currentTime(TimeUnit.SECONDS);
       for (TdApi.ChatBoostSlot slot : slots) {
-        if (slot.expirationDate > now)
-          count++;
+        if (slot.expirationDate > now && slot.currentlyBoostedChatId != 0 &&
+            slot.currentlyBoostedChatId != chatId()) {
+          result.add(slot);
+        }
       }
     }
-    return count;
+    return result;
   }
 
-  private int unusedSlotCount () {
-    int count = 0;
-    if (slots != null) {
-      long now = tdlib.currentTime(TimeUnit.SECONDS);
-      for (TdApi.ChatBoostSlot slot : slots) {
-        if (slot.expirationDate > now && slot.cooldownUntilDate <= now &&
-            slot.currentlyBoostedChatId == 0)
-          count++;
+  private void addReassignmentSlots (List<ListItem> items) {
+    if (slots != null && !slotsFailed) {
+      List<TdApi.ChatBoostSlot> candidates = reassignmentSlots();
+      for (TdApi.ChatBoostSlot slot : candidates) {
+        items.add(new ListItem(ListItem.TYPE_SEPARATOR));
+        addCustom(items, CELL_SLOT, slot, slot.slotId, R.id.btn_chatBoostSlot);
       }
-    }
-    return count;
-  }
-
-  private int usableSlotCount () {
-    int count = 0;
-    if (slots != null) {
-      for (TdApi.ChatBoostSlot slot : slots) {
-        if (isUsable(slot))
-          count++;
+      if (candidates.isEmpty()) {
+        items.add(new ListItem(ListItem.TYPE_DESCRIPTION, 0, 0, R.string.ChatBoostNoSlots));
       }
+    } else if (pendingLoads != 0) {
+      items.add(new ListItem(ListItem.TYPE_PROGRESS));
     }
-    return count;
   }
 
   private void buildCells () {
@@ -557,7 +553,9 @@ public class ChatBoostController extends
     selectedSlots.removeIf(id -> findUsableSlot(id) == null);
     List<ListItem> items = new ArrayList<>();
     addCustom(items, CELL_HEADER, status, 0);
-    if (chatId() != 0 && status != null) {
+    if (isReassignment()) {
+      addReassignmentSlots(items);
+    } else if (status != null) {
       int highlightedLevel = status.nextLevelBoostCount == 0 ? status.level : status.level + 1;
       TdApi.ChatBoostLevelFeatures next = features.get(highlightedLevel);
       if (next != null) {
@@ -584,33 +582,18 @@ public class ChatBoostController extends
         }
       }
     }
-    if ((loadFailed && status != null) || slotsFailed) {
+    if ((loadFailed && (status != null || isReassignment())) || slotsFailed) {
       items.add(new ListItem(ListItem.TYPE_DESCRIPTION, 0, 0, R.string.ChatBoostLoadFailed));
     }
 
-    items.add(new ListItem(ListItem.TYPE_HEADER, 0, 0, R.string.MyChatBoosts));
-    if (slots != null && !slotsFailed) {
-      int slotCount = 0;
-      for (TdApi.ChatBoostSlot slot : slots) {
-        if (slot.expirationDate <= tdlib.currentTime(TimeUnit.SECONDS))
-          continue;
-        if (slotCount++ > 0) {
-          items.add(new ListItem(ListItem.TYPE_SEPARATOR));
-        }
-        addCustom(items, CELL_SLOT, slot, slot.slotId, R.id.btn_chatBoostSlot);
-      }
-      if (slotCount > 0 && chatId() != 0 && usableSlotCount() > 0) {
-        items.add(new ListItem(ListItem.TYPE_DESCRIPTION, 0, 0, R.string.ChatBoostSelectInfo));
-      } else if (slotCount == 0) {
-        items.add(new ListItem(ListItem.TYPE_DESCRIPTION, 0, 0,
-          tdlib.hasPremium() ? R.string.ChatBoostNoSlots : chatId() == 0 ?
-          R.string.ChatBoostMyPremiumRequired : R.string.ChatBoostPremiumRequired));
-      }
-    } else if (pendingLoads != 0) {
-      items.add(new ListItem(ListItem.TYPE_PROGRESS));
+    if (!isReassignment() && slots != null && !slotsFailed && pendingLoads == 0 &&
+        unusedSlot() == null && reassignmentSlots().isEmpty() &&
+        status != null && status.appliedSlotIds.length == 0) {
+      items.add(new ListItem(ListItem.TYPE_DESCRIPTION, 0, 0,
+        tdlib.hasPremium() ? R.string.ChatBoostNoSlots : R.string.ChatBoostPremiumRequired));
     }
 
-    if (chatId() != 0 && status != null) {
+    if (!isReassignment() && status != null) {
       if (!status.boostUrl.isEmpty()) {
         items.add(new ListItem(ListItem.TYPE_HEADER, 0, 0, R.string.ChatBoostLink));
         addCustom(items, CELL_LINK, status.boostUrl, 0);
@@ -649,7 +632,7 @@ public class ChatBoostController extends
     adapter.replaceItems(items);
     updateBoostButton();
     removeCallbacks(updateSlots);
-    if (slots != null && (sheet != null ? sheet.isShowing() : isFocused()) && !isDestroyed()) {
+    if (slots != null && sheet.isShowing() && !isDestroyed()) {
       long now = tdlib.currentTime(TimeUnit.SECONDS);
       long nextUpdate = Long.MAX_VALUE;
       for (TdApi.ChatBoostSlot slot : slots) {
@@ -678,22 +661,15 @@ public class ChatBoostController extends
       text = Lang.getString(R.string.ChatBoostRetry);
     } else if (status.nextLevelBoostCount == 0) {
       text = Lang.getString(R.string.Done);
-    } else if (!selectedSlots.isEmpty()) {
-      boolean moving = false;
-      for (int id : selectedSlots) {
-        TdApi.ChatBoostSlot slot = findUsableSlot(id);
-        moving |= slot != null && slot.currentlyBoostedChatId != 0;
-      }
-      text = moving ? Lang.plural(R.string.ChatBoostMoveCount, selectedSlots.size()) :
-        selectedSlots.size() > 1 ? Lang.plural(R.string.ChatBoostApplyCount, selectedSlots.size()) :
-        Lang.getString(tdlib.isChannel(chatId()) ?
-          R.string.ChatBoostChannel : R.string.ChatBoostGroup);
-    } else if (usableSlotCount() > 0) {
-      text = Lang.getString(R.string.ChatBoostChoose);
+    } else if (isReassignment()) {
+      text = selectedSlots.isEmpty() ? Lang.getString(R.string.ChatBoostReassign) :
+        Lang.plural(R.string.ChatBoostMoveCount, selectedSlots.size());
+      enabled = !selectedSlots.isEmpty();
+    } else if (unusedSlot() != null || !reassignmentSlots().isEmpty()) {
+      text = Lang.getString(tdlib.isChannel(chatId()) ?
+        R.string.ChatBoostChannel : R.string.ChatBoostGroup);
     } else if (status.appliedSlotIds.length > 0) {
       text = Lang.getString(R.string.ChatBoostDone);
-    } else if (activeSlotCount() > 0) {
-      text = Lang.getString(R.string.MyChatBoosts);
     } else {
       text = Lang.getString(R.string.ChatBoostShareLink);
       enabled = !status.boostUrl.isEmpty();
@@ -708,21 +684,42 @@ public class ChatBoostController extends
       return;
     if (loadFailed || slotsFailed || status == null) {
       refresh();
-    } else if (status.nextLevelBoostCount == 0 ||
-        (selectedSlots.isEmpty() && usableSlotCount() == 0 && status.appliedSlotIds.length > 0)) {
-      if (sheet != null) {
+    } else if (status.nextLevelBoostCount == 0) {
+      sheet.hidePopupWindow(true);
+    } else if (isReassignment()) {
+      applySelectedBoosts();
+    } else {
+      TdApi.ChatBoostSlot unused = unusedSlot();
+      if (unused != null) {
+        applyBoost(new int[] {unused.slotId}, new long[] {0});
+        return;
+      }
+      List<TdApi.ChatBoostSlot> candidates = reassignmentSlots();
+      if (candidates.size() == 1 && isUsable(candidates.get(0))) {
+        TdApi.ChatBoostSlot slot = candidates.get(0);
+        final int slotId = slot.slotId;
+        final long previousChatId = slot.currentlyBoostedChatId;
+        showConfirm(Lang.getString(R.string.ChatBoostReassignConfirm,
+          tdlib.chatTitle(previousChatId), tdlib.chatTitle(chatId())),
+          Lang.getString(R.string.ChatBoostReassign), R.drawable.baseline_flash_on_24,
+          OptionColor.BLUE, () -> applyBoost(new int[] {slotId}, new long[] {previousChatId}));
+      } else if (!candidates.isEmpty()) {
+        showReassignment();
+      } else if (status.appliedSlotIds.length > 0) {
         sheet.hidePopupWindow(true);
+      } else if (!status.boostUrl.isEmpty()) {
+        shareBoostLink();
       }
-    } else if (!selectedSlots.isEmpty()) {
-      confirmBoost();
-    } else if (activeSlotCount() > 0) {
-      int position = adapter.indexOfViewById(R.id.btn_chatBoostSlot);
-      if (position >= 0) {
-        getRecyclerView().smoothScrollToPosition(position);
-      }
-    } else if (!status.boostUrl.isEmpty()) {
-      shareBoostLink();
     }
+  }
+
+  private void showReassignment () {
+    ChatBoostSheetController controller = new ChatBoostSheetController(context(), tdlib);
+    controller.setArguments(new Args(chatId(), true, () -> runOnUiThreadOptional(() -> {
+      resetBoosters();
+      refresh();
+    })));
+    controller.show();
   }
 
   private void shareBoostLink () {
@@ -828,23 +825,16 @@ public class ChatBoostController extends
     buildCells();
   }
 
-  private void confirmBoost () {
+  private void applySelectedBoosts () {
     if (applying || pendingLoads != 0 || slotsFailed || status == null ||
-        status.nextLevelBoostCount == 0)
+        loadFailed || status.nextLevelBoostCount == 0 || !isReassignment())
       return;
-    List<String> previousChats = new ArrayList<>();
     List<Integer> ids = new ArrayList<>();
     for (int id : selectedSlots) {
       TdApi.ChatBoostSlot slot = findUsableSlot(id);
       if (slot == null)
         continue;
       ids.add(id);
-      if (slot.currentlyBoostedChatId != 0) {
-        String title = tdlib.chatTitle(slot.currentlyBoostedChatId);
-        if (!previousChats.contains(title)) {
-          previousChats.add(title);
-        }
-      }
     }
     if (ids.isEmpty()) {
       refresh();
@@ -856,18 +846,12 @@ public class ChatBoostController extends
       slotIds[i] = ids.get(i);
       previousChatIds[i] = findUsableSlot(slotIds[i]).currentlyBoostedChatId;
     }
-    if (previousChats.isEmpty()) {
-      applyBoost(slotIds, previousChatIds);
-    } else {
-      showConfirm(Lang.getString(R.string.ChatBoostReassignConfirm,
-        android.text.TextUtils.join(", ", previousChats), tdlib.chatTitle(chatId())),
-        Lang.getString(R.string.ChatBoostReassign), R.drawable.baseline_flash_on_24,
-        OptionColor.BLUE, () -> applyBoost(slotIds, previousChatIds));
-    }
+    applyBoost(slotIds, previousChatIds);
   }
 
   private void applyBoost (int[] slotIds, long[] expectedChatIds) {
-    if (isDestroyed() || applying || pendingLoads != 0)
+    if (isDestroyed() || applying || pendingLoads != 0 || loadFailed || slotsFailed ||
+        status == null || status.nextLevelBoostCount == 0 || slotIds.length == 0)
       return;
     for (int i = 0; i < slotIds.length; i++) {
       TdApi.ChatBoostSlot slot = findUsableSlot(slotIds[i]);
@@ -885,8 +869,24 @@ public class ChatBoostController extends
     }
     applying = true;
     buildCells();
-    tdlib.send(new TdApi.BoostChat(chatId(), slotIds), (result, error) ->
-      runOnUiThreadOptional(() -> {
+    final long targetChatId = chatId();
+    final Runnable onBoostApplied = getArgumentsStrict().onBoostApplied;
+    tdlib.send(new TdApi.BoostChat(targetChatId, slotIds), (result, error) ->
+      runOnUiThread(() -> {
+        if (error == null) {
+          // Update permissions and the parent even if the picker was dismissed while applying.
+          tdlib.send(new TdApi.GetSupergroupFullInfo(ChatId.toSupergroupId(targetChatId)),
+            (fullInfo, fullInfoError) -> { });
+          for (long previousChatId : previousChatIds) {
+            tdlib.send(new TdApi.GetSupergroupFullInfo(ChatId.toSupergroupId(previousChatId)),
+              (fullInfo, fullInfoError) -> { });
+          }
+          if (onBoostApplied != null) {
+            onBoostApplied.run();
+          }
+        }
+        if (isDestroyed())
+          return;
         applying = false;
         if (error != null) {
           UI.showError(error);
@@ -894,12 +894,9 @@ public class ChatBoostController extends
           selectedSlots.clear();
           slots = result.slots;
           UI.showToast(Lang.plural(R.string.ChatBoostSuccess, slotIds.length), Toast.LENGTH_SHORT);
-          // Refresh full info so group permission and slow mode exemptions update too.
-          tdlib.send(new TdApi.GetSupergroupFullInfo(ChatId.toSupergroupId(chatId())),
-            (fullInfo, fullInfoError) -> { });
-          for (long previousChatId : previousChatIds) {
-            tdlib.send(new TdApi.GetSupergroupFullInfo(ChatId.toSupergroupId(previousChatId)),
-              (fullInfo, fullInfoError) -> { });
+          if (isReassignment()) {
+            sheet.hidePopupWindow(true);
+            return;
           }
         }
         resetBoosters();
@@ -972,11 +969,10 @@ public class ChatBoostController extends
     } else if (id == R.id.btn_chatBoostLevels) {
       expandedLevels = !expandedLevels;
       buildCells();
-    } else if (id == R.id.btn_chatBoostSlot && !applying && pendingLoads == 0) {
+    } else if (id == R.id.btn_chatBoostSlot && isReassignment() && !applying &&
+        pendingLoads == 0 && !slotsFailed && !loadFailed) {
       TdApi.ChatBoostSlot slot = (TdApi.ChatBoostSlot) ((ListItem) view.getTag()).getData();
-      if (chatId() == 0 && slot.currentlyBoostedChatId != 0) {
-        tdlib.ui().openChatBoost(this, slot.currentlyBoostedChatId);
-      } else if (chatId() != 0 && isUsable(slot)) {
+      if (findUsableSlot(slot.slotId) != null) {
         if (!selectedSlots.remove(slot.slotId)) {
           selectedSlots.add(slot.slotId);
         }

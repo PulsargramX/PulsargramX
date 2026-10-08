@@ -7681,18 +7681,11 @@ public class TdlibUi extends Handler {
   // Telegram Premium
 
   public void openChatBoost (ViewController<?> context, long chatId) {
-    if (context.isDestroyed())
+    if (context.isDestroyed() || chatId == 0)
       return;
-    ChatBoostController.Args args = new ChatBoostController.Args(chatId);
-    if (chatId != 0) {
-      ChatBoostSheetController controller = new ChatBoostSheetController(context.context(), tdlib);
-      controller.setArguments(args);
-      controller.show();
-    } else {
-      ChatBoostController controller = new ChatBoostController(context.context(), tdlib);
-      controller.setArguments(args);
-      context.context().navigation().navigateTo(controller);
-    }
+    ChatBoostSheetController controller = new ChatBoostSheetController(context.context(), tdlib);
+    controller.setArguments(new ChatBoostController.Args(chatId));
+    controller.show();
   }
 
   public interface PremiumLimitCallback {

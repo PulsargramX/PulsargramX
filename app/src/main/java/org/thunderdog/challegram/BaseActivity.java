@@ -865,6 +865,10 @@ public abstract class BaseActivity extends FragmentActivity implements View.OnTo
 
   protected @Nullable NetworkStatusBarView statusBar;
 
+  public @Nullable NetworkStatusBarView getNetworkStatusBar () {
+    return statusBar;
+  }
+
   public final void setWindowFlags (int flags, int mask) {
     getWindow().setFlags(flags, mask);
   }

@@ -642,9 +642,6 @@ public class SettingsController extends ViewController<Void> implements
     items.add(new ListItem(ListItem.TYPE_SHADOW_TOP));
     items.add(new ListItem(ListItem.TYPE_SETTING, R.id.btn_clientSettings, R.drawable.baseline_settings_24, R.string.ClientSettings));
     items.add(new ListItem(ListItem.TYPE_SEPARATOR));
-    items.add(new ListItem(ListItem.TYPE_SETTING, R.id.btn_myChatBoosts,
-      R.drawable.baseline_flash_on_24, R.string.MyChatBoosts));
-    items.add(new ListItem(ListItem.TYPE_SEPARATOR));
     items.add(new ListItem(ListItem.TYPE_VALUED_SETTING_COMPACT, R.id.btn_devices, R.drawable.baseline_devices_other_24, R.string.Devices));
     items.add(new ListItem(ListItem.TYPE_SEPARATOR));
 
@@ -1213,8 +1210,6 @@ public class SettingsController extends ViewController<Void> implements
       navigateTo(new SettingsNotificationController(context, tdlib));
     } else if (viewId == R.id.btn_devices) {
       navigateTo(new SettingsSessionsController(context, tdlib));
-    } else if (viewId == R.id.btn_myChatBoosts) {
-      tdlib.ui().openChatBoost(this, 0);
     } else if (viewId == R.id.btn_checkUpdates) {
       openInstallerPage(((AppInstallationUtil.DownloadUrl) ((ListItem) v.getTag()).getData()));
     } else if (viewId == R.id.btn_subscribeToBeta) {

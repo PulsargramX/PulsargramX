@@ -30,6 +30,9 @@ import android.view.WindowInsets;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.tool.Screen;
+import org.thunderdog.challegram.tool.UI;
+import org.thunderdog.challegram.widget.BaseRootLayout;
+import org.thunderdog.challegram.widget.NetworkStatusBarView;
 
 import me.vkryl.android.widget.FrameLayoutFix;
 
@@ -48,7 +51,9 @@ public class RootLayout extends FrameLayoutFix {
   private int backHeaderColor;
   private HeaderView backHeader;
   private FloatingButton backFloatingButton;
-  private BackSnapshot backHeaderSnapshot, backFloatingButtonSnapshot;
+  private BackSnapshot backHeaderSnapshot, backFloatingButtonSnapshot, backStatusBarSnapshot;
+  private BaseRootLayout backStatusBarParent;
+  private int backStatusBarOffsetX, backStatusBarOffsetY;
   private final Path backClip = new Path();
   private final Paint backPaint = new Paint();
 
@@ -100,6 +105,20 @@ public class RootLayout extends FrameLayoutFix {
       }
       backHeader = header;
       backFloatingButton = floatingButton;
+      NetworkStatusBarView statusBar = UI.getContext(getContext()).getNetworkStatusBar();
+      if (statusBar != null && statusBar.getParent() instanceof BaseRootLayout &&
+          statusBar.getWidth() > 0 && statusBar.getHeight() > 0) {
+        if (statusBar.getVisibility() == VISIBLE) {
+          backStatusBarSnapshot = new BackSnapshot(statusBar);
+        }
+        backStatusBarParent = (BaseRootLayout) statusBar.getParent();
+        int[] rootLocation = new int[2], parentLocation = new int[2];
+        getLocationInWindow(rootLocation);
+        backStatusBarParent.getLocationInWindow(parentLocation);
+        backStatusBarOffsetX = parentLocation[0] - rootLocation[0];
+        backStatusBarOffsetY = parentLocation[1] - rootLocation[1];
+        backStatusBarParent.setBackStatusBar(statusBar);
+      }
       invalidate();
       return true;
     } catch (RuntimeException | OutOfMemoryError e) {
@@ -131,10 +150,16 @@ public class RootLayout extends FrameLayoutFix {
   }
 
   private void clearBackHeader () {
+    if (backStatusBarParent != null) {
+      backStatusBarParent.setBackStatusBar(null);
+      backStatusBarParent = null;
+    }
+    backStatusBarOffsetX = backStatusBarOffsetY = 0;
     // Hardware display lists may still reference these bitmaps until the next frame. Release
     // our ownership and let their native references drain instead of recycling rendered pixels.
     backHeaderSnapshot = null;
     backFloatingButtonSnapshot = null;
+    backStatusBarSnapshot = null;
     backHeader = null;
     backFloatingButton = null;
   }
@@ -197,6 +222,7 @@ public class RootLayout extends FrameLayoutFix {
       if (backFloatingButton != null && backFloatingButton.getVisibility() == VISIBLE) {
         super.drawChild(canvas, backFloatingButton, drawingTime);
       }
+      drawBackStatusBar(canvas, false, drawingTime);
       canvas.restoreToCount(saveCount);
     }
 
@@ -218,6 +244,23 @@ public class RootLayout extends FrameLayoutFix {
     }
     if (backFloatingButtonSnapshot != null) {
       backFloatingButtonSnapshot.draw(canvas);
+    }
+    drawBackStatusBar(canvas, true, drawingTime);
+    canvas.restoreToCount(saveCount);
+  }
+
+  private void drawBackStatusBar (Canvas canvas, boolean foreground, long drawingTime) {
+    if (backStatusBarParent == null) {
+      return;
+    }
+    int saveCount = canvas.save();
+    canvas.translate(backStatusBarOffsetX, backStatusBarOffsetY);
+    if (foreground) {
+      if (backStatusBarSnapshot != null) {
+        backStatusBarSnapshot.draw(canvas);
+      }
+    } else {
+      backStatusBarParent.drawBackStatusBar(canvas, drawingTime);
     }
     canvas.restoreToCount(saveCount);
   }
