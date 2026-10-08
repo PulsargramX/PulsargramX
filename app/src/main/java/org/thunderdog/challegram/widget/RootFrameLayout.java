@@ -192,6 +192,7 @@ public class RootFrameLayout extends FrameLayoutFix {
   private interface ImeInsetsAnimation {
     void attach ();
     void detach ();
+    void reset ();
     boolean isRunning ();
     boolean deferInsets (Object insets);
     void skipNextAnimation (long timeoutMs);
@@ -214,10 +215,12 @@ public class RootFrameLayout extends FrameLayoutFix {
     private android.view.WindowInsets progressInsets;
     private android.view.WindowInsets finalAppliedInsets;
     private boolean awaitingSettlement;
+    private boolean animationStarted;
     private boolean skipAnimation;
     private long skipAnimationDeadline;
+    private long activeSkipAnimationDeadline;
     private final Runnable settle = this::settleInsets;
-    private final Runnable recoverPreparation = this::recoverPreparedInsets;
+    private final Runnable recoverAnimation = this::recoverAnimationInsets;
 
     ImeInsetsAnimationCallback (RootFrameLayout root) {
       // RootFrameLayout already redispatches child insets while laying out each frame.
@@ -236,12 +239,19 @@ public class RootFrameLayout extends FrameLayoutFix {
     @Override
     public void detach () {
       root.setWindowInsetsAnimationCallback(null);
+      reset();
+    }
+
+    @Override
+    public void reset () {
       root.removeCallbacks(settle);
-      root.removeCallbacks(recoverPreparation);
+      root.removeCallbacks(recoverAnimation);
       animations.clear();
       awaitingSettlement = false;
+      animationStarted = false;
       skipAnimation = false;
       skipAnimationDeadline = 0;
+      activeSkipAnimationDeadline = 0;
       pendingInsets = progressInsets = finalAppliedInsets = null;
     }
 
@@ -252,11 +262,15 @@ public class RootFrameLayout extends FrameLayoutFix {
 
     @Override
     public void skipNextAnimation (long timeoutMs) {
+      if (root.getWindowVisibility() != View.VISIBLE) {
+        return;
+      }
       // A panel replaces the IME at the same height. Apply its destination once,
       // so the composer does not move through a second opening/closing animation.
       skipAnimationDeadline = SystemClock.uptimeMillis() + timeoutMs;
       if (!animations.isEmpty() || awaitingSettlement) {
         skipAnimation = true;
+        activeSkipAnimationDeadline = skipAnimationDeadline;
         root.requestApplyInsets();
       }
     }
@@ -275,53 +289,84 @@ public class RootFrameLayout extends FrameLayoutFix {
 
     @Override
     public void onPrepare (android.view.WindowInsetsAnimation animation) {
-      if ((animation.getTypeMask() & android.view.WindowInsets.Type.ime()) == 0 ||
+      if (root.getWindowVisibility() != View.VISIBLE ||
+          (animation.getTypeMask() & android.view.WindowInsets.Type.ime()) == 0 ||
           animations.contains(animation)) {
         return;
       }
       // Android replaces the previous animation controlling the IME. Its onEnd
-      // can be missing: never carry that animation or its panel suppression into
-      // the replacement. Preserve only a same-frame, already-ended panel switch.
-      skipAnimation = (skipAnimation && awaitingSettlement) ||
-        SystemClock.uptimeMillis() < skipAnimationDeadline;
+      // can be missing: never carry that animation into its replacement. Panel
+      // suppression may continue only within the original switch's deadline,
+      // even if its settlement runnable has not had a chance to run yet.
+      long deadline = skipAnimation && awaitingSettlement ?
+        Math.max(skipAnimationDeadline, activeSkipAnimationDeadline) : skipAnimationDeadline;
+      skipAnimation = SystemClock.uptimeMillis() < deadline;
+      activeSkipAnimationDeadline = skipAnimation ? deadline : 0;
+      skipAnimationDeadline = 0;
       root.removeCallbacks(settle);
-      root.removeCallbacks(recoverPreparation);
+      root.removeCallbacks(recoverAnimation);
       animations.clear();
       awaitingSettlement = false;
+      animationStarted = false;
       pendingInsets = progressInsets = finalAppliedInsets = null;
-      skipAnimationDeadline = 0;
       animations.add(animation);
-      root.postDelayed(recoverPreparation, PREPARE_TIMEOUT_MS);
+      root.postDelayed(recoverAnimation, PREPARE_TIMEOUT_MS);
     }
 
     @Override
     public android.view.WindowInsetsAnimation.Bounds onStart (
       android.view.WindowInsetsAnimation animation, android.view.WindowInsetsAnimation.Bounds bounds) {
       if (animations.contains(animation)) {
-        root.removeCallbacks(recoverPreparation);
+        onAnimationStarted(animation);
       }
       return bounds;
+    }
+
+    private void onAnimationStarted (android.view.WindowInsetsAnimation animation) {
+      animationStarted = true;
+      root.removeCallbacks(recoverAnimation);
+      // Ordinary animations can also lose onEnd after starting. Renew recovery
+      // on progress so slow frames are safe. Durationless predictive gestures
+      // can be held indefinitely and must not time out while the window is visible.
+      long duration = animation.getDurationMillis();
+      if (duration >= 0) {
+        root.postDelayed(recoverAnimation, duration + PREPARE_TIMEOUT_MS);
+      }
     }
 
     @Override
     public android.view.WindowInsets onProgress (android.view.WindowInsets insets,
                                                 List<android.view.WindowInsetsAnimation> runningAnimations) {
-      boolean hasImeAnimation = false;
+      if (root.getWindowVisibility() != View.VISIBLE) {
+        return insets;
+      }
+      android.view.WindowInsetsAnimation runningImeAnimation = null;
       for (android.view.WindowInsetsAnimation animation : runningAnimations) {
         if ((animation.getTypeMask() & android.view.WindowInsets.Type.ime()) != 0) {
           // Also handle a root attached while an animation is already underway.
-          if (!animations.contains(animation)) {
+          if (animations.isEmpty() && !awaitingSettlement) {
             onPrepare(animation);
           }
-          hasImeAnimation = true;
+          if (animations.contains(animation)) {
+            runningImeAnimation = animation;
+            break;
+          }
         }
       }
-      if (hasImeAnimation) {
-        root.removeCallbacks(recoverPreparation);
+      if (runningImeAnimation != null) {
+        onAnimationStarted(runningImeAnimation);
         progressInsets = insets;
         if (!skipAnimation) {
           root.processWindowInsets(insets, false);
         }
+      } else if (animationStarted && !animations.isEmpty()) {
+        // The running list no longer contains our IME. Recover a missing onEnd
+        // using this frame, but never retire a replacement still awaiting onStart.
+        root.removeCallbacks(recoverAnimation);
+        animations.clear();
+        finalAppliedInsets = insets;
+        awaitingSettlement = true;
+        root.postOnAnimation(settle);
       }
       return insets;
     }
@@ -331,16 +376,16 @@ public class RootFrameLayout extends FrameLayoutFix {
       if (!animations.remove(animation) || !animations.isEmpty()) {
         return;
       }
-      root.removeCallbacks(recoverPreparation);
+      root.removeCallbacks(recoverAnimation);
       // A replacement animation may be prepared in this frame. Do not persist the
       // interrupted height or clear input focus before that animation takes over.
       awaitingSettlement = true;
       root.postOnAnimation(settle);
     }
 
-    private void recoverPreparedInsets () {
-      // Cancellation before onStart can omit onEnd. No rendered frame exists,
-      // so recover from the current window instead of retaining deferred insets.
+    private void recoverAnimationInsets () {
+      // Callbacks have stopped. The last progress may be an interrupted height;
+      // recover from the current window instead of retaining deferred insets.
       animations.clear();
       finalAppliedInsets = root.getRootWindowInsets();
       awaitingSettlement = true;
@@ -361,7 +406,9 @@ public class RootFrameLayout extends FrameLayoutFix {
         insets = pendingInsets;
       }
       awaitingSettlement = false;
+      animationStarted = false;
       skipAnimation = false;
+      activeSkipAnimationDeadline = 0;
       pendingInsets = progressInsets = finalAppliedInsets = null;
       if (insets != null) {
         root.processWindowInsets(insets, false);
@@ -396,6 +443,20 @@ public class RootFrameLayout extends FrameLayoutFix {
     super.onAttachedToWindow();
     if (imeInsetsAnimation != null) {
       imeInsetsAnimation.attach();
+    }
+  }
+
+  @Override
+  protected void onWindowVisibilityChanged (int visibility) {
+    super.onWindowVisibilityChanged(visibility);
+    if (imeInsetsAnimation != null) {
+      if (visibility != VISIBLE) {
+        // The activity can be hidden without detaching its root. Its animation
+        // may never finish, especially a predictive gesture interrupted by Home.
+        imeInsetsAnimation.reset();
+      } else {
+        requestApplyInsets();
+      }
     }
   }
 

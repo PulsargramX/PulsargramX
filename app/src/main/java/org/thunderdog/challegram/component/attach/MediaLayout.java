@@ -1078,6 +1078,16 @@ public class MediaLayout extends FrameLayoutFix implements
   // Popup
 
   @Override
+  public void onPopupDismissPrepare (PopupLayout popup) {
+    if (showKeyboardOnHide) {
+      showKeyboardOnHide = false;
+      if (target != null && !target.isDestroyed() && cameraOpenOptions == null) {
+        target.showKeyboard();
+      }
+    }
+  }
+
+  @Override
   public void onPopupDismiss (PopupLayout popup) {
     if (cameraOpenOptions != null) {
       if (parent != null && (parent instanceof MessagesController || mode == MODE_AVATAR_PICKER) && !parent.isDestroyed()) {
@@ -1099,12 +1109,6 @@ public class MediaLayout extends FrameLayoutFix implements
         removeView(controller.getValue());
         if (!controller.isDestroyed())
           controller.destroy();
-      }
-    }
-    if (showKeyboardOnHide) {
-      showKeyboardOnHide = false;
-      if (target != null && !target.isDestroyed() && cameraOpenOptions == null) {
-        target.showKeyboard();
       }
     }
     if (sendButton != null) {

@@ -36,6 +36,7 @@ class ImeAnimationBehaviorTest(unittest.TestCase):
         callback = java_method(source, "private static final class ImeInsetsAnimationCallback")
         callback = callback.replace("android.view.WindowInsetsAnimation", "InsetsAnimation")
         callback = callback.replace("android.view.WindowInsets", "Insets")
+        visibility = java_method(source, "protected void onWindowVisibilityChanged (")
         messages = read("app/src/main/java/org/thunderdog/challegram/ui/MessagesController.java")
         composer = messages[messages.index("inputView = new InputView(context, tdlib, this)"):]
         touch = java_method(composer, "public boolean onTouchEvent (MotionEvent event)")
@@ -57,8 +58,11 @@ public class ImeAnimationTest {
   }
   static class InsetsAnimation {
     final int mask;
-    InsetsAnimation(int mask) { this.mask = mask; }
+    final long duration;
+    InsetsAnimation(int mask) { this(mask, 200); }
+    InsetsAnimation(int mask, long duration) { this.mask = mask; this.duration = duration; }
     int getTypeMask() { return mask; }
+    long getDurationMillis() { return duration; }
     static class Bounds {}
     abstract static class Callback {
       static final int DISPATCH_MODE_STOP = 0;
@@ -69,13 +73,21 @@ public class ImeAnimationTest {
       abstract Insets onProgress(Insets insets, List<InsetsAnimation> animations);
     }
   }
-  static class RootFrameLayout {
+  static class View {
+    static final int VISIBLE = 0, GONE = 8;
+    int windowVisibility = VISIBLE;
+    int getWindowVisibility() { return windowVisibility; }
+    protected void onWindowVisibilityChanged(int visibility) { windowVisibility = visibility; }
+  }
+  static class RootFrameLayout extends View {
+    ImeInsetsAnimation imeInsetsAnimation;
+    Object animationCallback;
     Insets staticInsets = new Insets(0);
     final List<Integer> applied = new ArrayList<>();
     Runnable nextFrame;
     final Map<Runnable, Long> delayed = new HashMap<>();
     int insetRequests;
-    void setWindowInsetsAnimationCallback(Object callback) {}
+    void setWindowInsetsAnimationCallback(Object callback) { animationCallback = callback; }
     void requestApplyInsets() { insetRequests++; }
     void requestLayout() {}
     void removeCallbacks(Runnable action) {
@@ -109,6 +121,7 @@ public class ImeAnimationTest {
       if (!callback.deferInsets(staticInsets)) processWindowInsets(staticInsets, false);
     }
     void skipNextImeAnimation(long timeoutMs) { UI.callback.skipNextAnimation(timeoutMs); }
+    __WINDOW_VISIBILITY__
   }
   static class UI {
     static final UI context = new UI();
@@ -176,6 +189,7 @@ public class ImeAnimationTest {
     ImeInsetsAnimationCallback callback = new ImeInsetsAnimationCallback(root);
     UI.root = root;
     UI.callback = callback;
+    root.imeInsetsAnimation = callback;
     Composer composer = new Composer();
     root.applied.clear();
     composer.input.onTouchEvent(new MotionEvent(MotionEvent.ACTION_UP));
@@ -263,7 +277,7 @@ public class ImeAnimationTest {
     }
 
     root.applied.clear();
-    InsetsAnimation gesture = new InsetsAnimation(1);
+    InsetsAnimation gesture = new InsetsAnimation(1, -1);
     callback.onPrepare(gesture);
     root.apply(callback, 0);
     check(root.applied.isEmpty(), "Predictive back must defer destination insets");
@@ -362,9 +376,166 @@ public class ImeAnimationTest {
     callback.onEnd(gesture);
     root.frame();
     callback.detach();
+
+    // The settlement runnable has not run yet, but the panel request is already
+    // too old to suppress a new, ordinary opening/closing animation.
+    callback.attach();
+    for (int destination : new int[] {0, 320}) {
+      callback.skipNextAnimation(250);
+      InsetsAnimation panelSwitch = new InsetsAnimation(1);
+      callback.onPrepare(panelSwitch);
+      callback.onStart(panelSwitch, new InsetsAnimation.Bounds());
+      root.apply(callback, 320 - destination);
+      root.advance(251);
+      callback.onEnd(panelSwitch);
+      InsetsAnimation ordinary = new InsetsAnimation(1);
+      callback.onPrepare(ordinary);
+      check(callback.isRunning(), "An ended panel switch must not suppress an expired replacement");
+      root.applied.clear();
+      root.apply(callback, destination);
+      progress(callback, ordinary, 160);
+      check(root.applied.equals(List.of(160)), "The replacement must render intermediate IME insets");
+      callback.onEnd(ordinary);
+      root.frame();
+    }
+
+    // A newer panel request can arrive while the previous animation is settling.
+    // Settling must not erase the request before Android prepares its animation.
+    InsetsAnimation finishing = new InsetsAnimation(1);
+    callback.onPrepare(finishing);
+    progress(callback, finishing, 320);
+    callback.onEnd(finishing);
+    callback.skipNextAnimation(250);
+    root.frame();
+    InsetsAnimation requested = new InsetsAnimation(1);
+    callback.onPrepare(requested);
+    check(!callback.isRunning(), "Settlement must preserve an unconsumed panel request");
+    root.applied.clear();
+    root.apply(callback, 0);
+    progress(callback, requested, 160);
+    check(root.applied.equals(List.of(0)), "The pending panel switch must still suppress intermediate frames");
+    callback.onEnd(requested);
+    root.frame();
+    InsetsAnimation next = new InsetsAnimation(1);
+    callback.onPrepare(next);
+    check(callback.isRunning(), "A settled switch must consume its suppression request");
+    callback.onEnd(next);
+    root.frame();
+
+    // Missing end callbacks after onStart must recover too, whether or not the
+    // abandoned animation was suppressing IME frames for a panel switch.
+    for (boolean suppressed : new boolean[] {false, true}) {
+      if (suppressed) callback.skipNextAnimation(250);
+      InsetsAnimation stalled = new InsetsAnimation(1);
+      callback.onPrepare(stalled);
+      callback.onStart(stalled, new InsetsAnimation.Bounds());
+      root.apply(callback, 320);
+      progress(callback, stalled, 160);
+      root.advance(1200);
+      check(callback.animations.isEmpty(), "A started fixed-duration animation must recover without onEnd");
+      check(!callback.isRunning(), "Recovery must release static inset dispatch");
+      check(root.applied.get(root.applied.size() - 1) == 320,
+        "Recovery must use current window insets instead of the abandoned intermediate height");
+      root.applied.clear();
+      root.apply(callback, 0);
+      check(root.applied.equals(List.of(0)), "Static insets must work after a stalled animation");
+    }
+
+    // Normal progress renews recovery, including a long animation. A held
+    // predictive gesture has no fixed duration and must never expire.
+    InsetsAnimation slow = new InsetsAnimation(1, 3000);
+    callback.onPrepare(slow);
+    callback.onStart(slow, new InsetsAnimation.Bounds());
+    root.advance(3999);
+    check(callback.isRunning(), "Respect the platform animation duration before recovering");
+    progress(callback, slow, 160);
+    root.advance(3999);
+    check(callback.isRunning(), "Fresh progress must postpone stalled-animation recovery");
+    callback.onEnd(slow);
+    root.frame();
+    root.advance(1);
+    check(!callback.isRunning(), "An ended animation must cancel recovery");
+
+    // A system-bar frame may reveal that the IME disappeared without onEnd.
+    callback.onPrepare(gesture);
+    callback.onStart(gesture, new InsetsAnimation.Bounds());
+    root.apply(callback, 0);
+    progress(callback, gesture, 160);
+    root.applied.clear();
+    callback.onProgress(new Insets(320), List.of(new InsetsAnimation(2)));
+    root.frame();
+    check(!callback.isRunning(), "An absent IME must settle even for a durationless gesture");
+    check(root.applied.equals(List.of(320)), "Use current progress when the IME stops running");
+
+    // Progress from an interrupted animation may arrive while its replacement
+    // is prepared but not started. It must not consume the replacement's state.
+    callback.onPrepare(gesture);
+    callback.onStart(gesture, new InsetsAnimation.Bounds());
+    progress(callback, gesture, 240);
+    callback.skipNextAnimation(250);
+    InsetsAnimation prepared = new InsetsAnimation(1);
+    callback.onPrepare(prepared);
+    root.applied.clear();
+    root.apply(callback, 0);
+    progress(callback, gesture, 160);
+    callback.onProgress(new Insets(160), List.of(new InsetsAnimation(2)));
+    check(callback.animations.contains(prepared), "Older progress must retain the prepared replacement");
+    check(root.applied.equals(List.of(0)), "Older progress must not render into a panel replacement");
+    callback.onStart(prepared, new InsetsAnimation.Bounds());
+    progress(callback, prepared, 80);
+    check(root.applied.equals(List.of(0)), "The replacement must retain panel suppression");
+    callback.onEnd(gesture);
+    callback.onEnd(prepared);
+    root.frame();
+
+    // Hiding a retained activity root must clear even a durationless gesture.
+    // Keep the callback installed so future keyboard animations still arrive.
+    for (boolean suppressed : new boolean[] {false, true}) {
+      if (suppressed) callback.skipNextAnimation(250);
+      callback.onPrepare(gesture);
+      callback.onStart(gesture, new InsetsAnimation.Bounds());
+      root.apply(callback, 0);
+      progress(callback, gesture, 160);
+      root.onWindowVisibilityChanged(View.GONE);
+      check(!callback.isRunning(), "Backgrounding must clear a retained root's animation state");
+      check(callback.animations.isEmpty(), "Backgrounding must also clear suppressed gestures");
+      check(root.animationCallback == callback, "Visibility changes must preserve callback registration");
+      root.applied.clear();
+      root.advance(5000);
+      root.frame();
+      callback.skipNextAnimation(250);
+      callback.onPrepare(gesture);
+      callback.onStart(gesture, new InsetsAnimation.Bounds());
+      progress(callback, gesture, 80);
+      callback.onEnd(gesture);
+      check(callback.animations.isEmpty(), "Late hidden-window callbacks must not restart an animation");
+      check(root.applied.isEmpty(), "Backgrounding must cancel queued settlement and recovery");
+      requests = root.insetRequests;
+      root.onWindowVisibilityChanged(View.VISIBLE);
+      check(root.insetRequests == requests + 1, "Returning to the app must request current insets");
+      InsetsAnimation resumed = new InsetsAnimation(1);
+      callback.onPrepare(resumed);
+      check(callback.isRunning(), "Returning to the app must restore ordinary keyboard animation");
+      root.apply(callback, 320);
+      progress(callback, resumed, 160);
+      check(root.applied.equals(List.of(160)), "The resumed keyboard must render intermediate frames");
+      callback.onEnd(resumed);
+      root.frame();
+    }
+
+    InsetsAnimation detached = new InsetsAnimation(1);
+    callback.onPrepare(detached);
+    callback.onStart(detached, new InsetsAnimation.Bounds());
+    progress(callback, detached, 160);
+    callback.detach();
+    root.applied.clear();
+    root.advance(5000);
+    root.frame();
+    check(root.applied.isEmpty(), "Detaching must cancel recovery after an animation has started");
   }
 """
         harness = harness.replace("__TRANSITIONS__", transitions).replace("__TOUCH__", touch)
+        harness = harness.replace("__WINDOW_VISIBILITY__", visibility)
         run_java(harness + interface + callback + "\n}\n")
 
     def test_read_details_do_not_delay_menu_opening(self) -> None:
