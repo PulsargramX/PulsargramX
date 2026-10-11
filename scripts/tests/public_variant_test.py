@@ -174,6 +174,11 @@ print(json.dumps({"config": os.environ.get("GH_CONFIG_DIR"), "arguments": sys.ar
 
 
 class ClientPolicyTest(unittest.TestCase):
+  def test_ci_build_runs_only_in_the_public_repository(self):
+    workflow = (ROOT / ".github/workflows/build-and-publish.yml").read_text()
+    build_job = workflow.split("\n  build:\n", 1)[1].split("\n    steps:\n", 1)[0]
+    self.assertIn("\n    if: github.repository == 'PulsargramX/PulsargramX'\n", build_job)
+
   @unittest.skipUnless(shutil.which("javac") and shutil.which("java"), "Java is unavailable")
   def test_public_policy_enforces_server_permissions_and_ignores_personal_preferences(self):
     self.compile_and_run("app/src/public", False)
