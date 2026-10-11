@@ -362,6 +362,10 @@ public class MediaStickersAdapter extends RecyclerView.Adapter<MediaStickersAdap
   @Override
   public void onViewAttachedToWindow (StickerHolder holder) {
     switch (holder.getItemViewType()) {
+      case StickerHolder.TYPE_PADDING_OFFSETABLE: {
+        holder.itemView.forceLayout();
+        break;
+      }
       case StickerHolder.TYPE_EMOJI_STATUS_DEFAULT:
       case StickerHolder.TYPE_STICKER: {
         ((StickerSmallView) holder.itemView).attach();
@@ -372,6 +376,7 @@ public class MediaStickersAdapter extends RecyclerView.Adapter<MediaStickersAdap
         break;
       }
       case StickerHolder.TYPE_PROGRESS_OFFSETABLE: {
+        holder.itemView.forceLayout();
         ((ProgressComponentView) ((ViewGroup) (holder.itemView)).getChildAt(0)).attach();
         break;
       }

@@ -532,10 +532,23 @@ public class StickerSetWrap extends FrameLayoutFix implements StickersListContro
     }
   }
 
+  private int contentHeight = -1;
+
   @Override
   protected void onMeasure (int widthMeasureSpec, int heightMeasureSpec) {
+    int height = MeasureSpec.getSize(heightMeasureSpec);
+    if (contentHeight != height) {
+      contentHeight = height;
+      stickersController.onViewportChanged();
+    }
     super.onMeasure(widthMeasureSpec, heightMeasureSpec);
     updateHeader();
+  }
+
+  @Override
+  protected void onLayout (boolean changed, int left, int top, int right, int bottom) {
+    super.onLayout(changed, left, top, right, bottom);
+    stickersController.updateScrollState();
   }
 
   public void initWithInfo (TdApi.StickerSetInfo info) {
@@ -604,13 +617,17 @@ public class StickerSetWrap extends FrameLayoutFix implements StickersListContro
     }
   }
 
+  private int getContentHeight () {
+    return contentHeight >= 0 ? contentHeight : UI.getContext(getContext()).getVisibleContentHeight();
+  }
+
   private int calculateTotalHeight () {
-    return Math.min(Math.max(UI.getContext(getContext()).getVisibleContentHeight() / 2, Screen.smallestSide()), Screen.dp(380f));
+    return Math.min(Math.max(getContentHeight() / 2, Screen.smallestSide()), Screen.dp(380f));
   }
 
   @Override
   public int provideOffset () {
-    return Math.max(0, UI.getContext(getContext()).getVisibleContentHeight() - calculateTotalHeight());
+    return Math.max(0, getContentHeight() - calculateTotalHeight());
   }
 
   // private float shadowFactor;
@@ -627,7 +644,7 @@ public class StickerSetWrap extends FrameLayoutFix implements StickersListContro
 
   @Override
   public int provideReverseOffset () {
-    return Screen.currentActualHeight() - provideOffset() - Screen.dp(56f) - Size.getHeaderPortraitSize();
+    return Math.max(0, getContentHeight() - provideOffset() - Screen.dp(56f) - Size.getHeaderPortraitSize());
   }
 
   // Click logic

@@ -420,17 +420,7 @@ public class StickersListController extends ViewController<StickersListControlle
 
       @Override
       public void onScrolled (@NonNull RecyclerView recyclerView, int dx, int dy) {
-        int i = manager.findFirstVisibleItemPosition();
-        View view = manager.findViewByPosition(i);
-        if (view != null) {
-          View stickerView = i == 1 ? view : manager.findViewByPosition(1);
-          float shadowFactor = stickerView == null ? 1f : stickerView.getTop() >= 0 ? 0f : Math.max(0f, Math.min(1f, (float) -stickerView.getTop() / (float) Screen.dp(StickerSmallView.PADDING)));
-
-          manager.findViewByPosition(1);
-
-          offsetScroll = i > 0 ? offsetProvider.provideOffset() : -view.getTop();
-          offsetProvider.onContentScroll(shadowFactor);
-        }
+        updateScrollState();
       }
     });
     manager.setSpanSizeLookup(new GridLayoutManager.SpanSizeLookup() {
@@ -476,6 +466,33 @@ public class StickersListController extends ViewController<StickersListControlle
 
   public int getOffsetScroll () {
     return offsetScroll;
+  }
+
+  public void onViewportChanged () {
+    if (recyclerView != null) {
+      // Offset rows depend on the viewport even when their measure specs stay the same.
+      for (int i = 0; i < recyclerView.getChildCount(); i++) {
+        View view = recyclerView.getChildAt(i);
+        int type = manager.getItemViewType(view);
+        if (type == MediaStickersAdapter.StickerHolder.TYPE_PADDING_OFFSETABLE ||
+            type == MediaStickersAdapter.StickerHolder.TYPE_PROGRESS_OFFSETABLE) {
+          view.forceLayout();
+        }
+      }
+      recyclerView.forceLayout();
+    }
+  }
+
+  public void updateScrollState () {
+    int i = manager.findFirstVisibleItemPosition();
+    View view = manager.findViewByPosition(i);
+    if (view != null) {
+      View stickerView = i == 1 ? view : manager.findViewByPosition(1);
+      float shadowFactor = stickerView == null ? 1f : stickerView.getTop() >= 0 ? 0f : Math.max(0f, Math.min(1f, (float) -stickerView.getTop() / (float) Screen.dp(StickerSmallView.PADDING)));
+
+      offsetScroll = i > 0 ? offsetProvider.provideOffset() : -view.getTop();
+      offsetProvider.onContentScroll(shadowFactor);
+    }
   }
 
   private CancellableRunnable itemAnimatorRunnable;
