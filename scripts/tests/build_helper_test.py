@@ -26,6 +26,21 @@ OVERLAY_SPEC.loader.exec_module(OVERLAY)
 
 
 class UpstreamBuildCompatibilityTest(unittest.TestCase):
+  def test_gradle_daemon_and_ci_support_the_build_logic_jvm(self):
+    root = SCRIPTS.parent
+    criteria = BUILD.RELEASE.read_properties(root / "gradle/gradle-daemon-jvm.properties")
+    daemon_version = int(criteria["toolchainVersion"])
+    build_logic = (root / "buildSrc/build.gradle.kts").read_text()
+    required_versions = re.findall(r"JavaLanguageVersion\.of\((\d+)\)|JVM_(\d+)",
+                                   build_logic)
+    self.assertTrue(required_versions)
+    self.assertGreaterEqual(daemon_version,
+                            max(int(java or kotlin) for java, kotlin in required_versions))
+    workflow = (root / ".github/workflows/build-and-publish.yml").read_text()
+    installed_version = re.search(r"java-version:\s*['\"](\d+)['\"]", workflow)
+    self.assertIsNotNone(installed_version)
+    self.assertEqual(int(installed_version.group(1)), daemon_version)
+
   def test_variant_helpers_reference_declared_abis(self):
     root = SCRIPTS.parent
     config = (root / "buildSrc/src/main/kotlin/Config.kt").read_text()
