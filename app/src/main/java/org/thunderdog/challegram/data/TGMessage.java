@@ -800,7 +800,9 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     boolean isChannel = isChannel();
 
     TdApi.Message topMessage = top.getMessage();
-    if (!StringUtils.equalsOrBothEmpty(top.getAdministratorSign(), getAdministratorSign())) {
+    // Pending sends can lack member tags; ordinary outgoing bubbles don't display them.
+    if ((top.needName(true) || needName(true)) &&
+        !StringUtils.equalsOrBothEmpty(top.getAdministratorSign(), getAdministratorSign())) {
       setHeaderEnabled(!headerDisabled());
       top.setIsBottom(true);
       return false;

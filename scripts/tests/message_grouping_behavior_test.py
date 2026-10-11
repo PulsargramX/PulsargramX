@@ -1,4 +1,4 @@
-"""Exercise live message grouping after TDLib corrects send timestamps."""
+"""Exercise immediate message grouping and send metadata corrections."""
 
 from pathlib import Path
 import re
@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 @unittest.skipUnless(shutil.which("javac") and shutil.which("java"), "Requires a JDK")
 class MessageGroupingBehaviorTest(unittest.TestCase):
-    def test_send_updates_match_reopened_history(self):
+    def test_live_grouping_matches_reopened_history(self):
         message = read("app/src/main/java/org/thunderdog/challegram/data/TGMessage.java")
         adapter = read("app/src/main/java/org/thunderdog/challegram/component/chat/MessagesAdapter.java")
         manager = read("app/src/main/java/org/thunderdog/challegram/component/chat/MessagesManager.java")
@@ -28,11 +28,13 @@ class MessageGroupingBehaviorTest(unittest.TestCase):
             "boolean isBottomMessage ()", "public void setIsBottom (",
             "private void setHeaderEnabled (", "public final int setSendSucceeded (",
             "private static void copyFlags (", "public boolean setSendFailed (",
+            "private String getAdministratorSign ()", "private boolean needName (boolean allowVia)",
         )).replace("@Nullable ", "")
         adapter_methods = "\n".join(java_method(adapter, signature) for signature in (
             "public TGMessage getMessage (int index)", "public TGMessage getItem (int index)",
             "public int getMessageCount ()", "public void replaceItem (",
             "public int indexOfMessageContainer (long messageId)",
+            "public boolean addMessageImpl (",
         ))
         # The baseline has no refresh helper; its real send callbacks must still run and fail.
         if "public void updateMessageMerging (" in adapter:
@@ -51,6 +53,7 @@ public class MessageGroupingTest {
     static boolean hasFlag(int flags, int flag) { return (flags & flag) != 0; }
   }
   static class StringUtils {
+    static boolean isEmpty(String text) { return text == null || text.isEmpty(); }
     static boolean equalsOrBothEmpty(String a, String b) {
       return Objects.equals(a == null ? "" : a, b == null ? "" : b);
     }
@@ -67,20 +70,50 @@ public class MessageGroupingTest {
   static class Td {
     static boolean equalsTo(Object a, Object b) { return Objects.equals(a, b); }
   }
+  static class ChatId {
+    static boolean isBasicGroup(long id) { return id == -10; }
+    static boolean isMultiChat(long id) { return id < 0; }
+  }
+  static class R {
+    static class string {
+      static final int message_ownerSign = 1, message_adminSignPlain = 2, message_groupSign = 3;
+    }
+  }
+  static class Lang { static String getString(int id) { return "label:" + id; } }
   static class Tdlib {
+    boolean isSupergroup(long id) { return id == -100; }
+    boolean isMultiChat(long id) { return id < 0; }
+    boolean isChannel(long id) { return id == -200; }
+    TdApi.Chat chat(long id) { return null; }
     boolean isSameSender(TdApi.Message a, TdApi.Message b) {
-      return ((TdApi.MessageSenderUser) a.senderId).userId ==
-             ((TdApi.MessageSenderUser) b.senderId).userId;
+      if (a.senderId.getConstructor() != b.senderId.getConstructor()) return false;
+      if (a.senderId instanceof TdApi.MessageSenderUser)
+        return ((TdApi.MessageSenderUser) a.senderId).userId ==
+               ((TdApi.MessageSenderUser) b.senderId).userId;
+      return ((TdApi.MessageSenderChat) a.senderId).chatId ==
+             ((TdApi.MessageSenderChat) b.senderId).chatId;
     }
   }
   static class Controller {
     boolean scheduled;
     boolean areScheduledOnly() { return scheduled; }
+    ThreadInfo getMessageThread() { return null; }
+    void highlightMessage(Object id) {}
   }
   static class Keyboard { void updateMessageId(long oldId, long newId) {} }
-  static class TGMessage {
+  static class TGMessage implements Comparable<TGMessage> {
     CONSTANTS
     TdApi.Message msg;
+    TdApi.Chat chat;
+    TdApi.ChatAdministrator administrator;
+    String memberTag;
+    class Sender {
+      boolean isUser() { return msg.senderId instanceof TdApi.MessageSenderUser; }
+      boolean isAnonymousGroupAdmin() { return !isUser() && getChatId() == msg.chatId; }
+      boolean isChannel() { return !isUser() && !isAnonymousGroupAdmin(); }
+      long getChatId() { return isUser() ? 0 : ((TdApi.MessageSenderChat) msg.senderId).chatId; }
+    }
+    final Sender sender = new Sender();
     final Tdlib tdlib = new Tdlib();
     final Controller controller = new Controller();
     ArrayList<TdApi.Message> combinedMessages;
@@ -92,7 +125,13 @@ public class MessageGroupingTest {
     TdApi.Message getMessage(long id) { return msg.id == id ? msg : null; }
     boolean isDescendantOrSelf(long id) { return msg.id == id; }
     Controller messagesController() { return controller; }
+    Tdlib tdlib() { return tdlib; }
     boolean useBubbles() { return bubbles; }
+    boolean useBubble() { return bubbles; }
+    boolean useForward() { return isForward(); }
+    boolean separateReplyFromBubble() { return false; }
+    boolean isDemoGroupChat() { return false; }
+    boolean isPsa() { return false; }
     boolean isChannel() { return false; }
     boolean isEventLog() { return false; }
     boolean isThreadHeader() { return false; }
@@ -107,7 +146,15 @@ public class MessageGroupingTest {
     boolean isUnread() { return false; }
     boolean isSending() { return msg.sendingState instanceof TdApi.MessageSendingStatePending; }
     boolean isScheduled() { return controller.scheduled; }
-    String getAdministratorSign() { return null; }
+    long getId() { return msg.id; }
+    long getChatId() { return msg.chatId; }
+    Object toMessageId() { return msg.id; }
+    boolean isOld() { return false; }
+    boolean isNotSent() { return msg.sendingState != null; }
+    boolean checkIsUnread(boolean value) { return false; }
+    void markAsBeingAdded(boolean value) {}
+    void setShowUnreadBadge(boolean value) {}
+    public int compareTo(TGMessage other) { return Long.compare(other.msg.id, msg.id); }
     int getComparingDate() { return msg.date; }
     int getDate() { return msg.date; }
     String genDate() { return "date"; }
@@ -121,6 +168,7 @@ public class MessageGroupingTest {
     void setMergeBottom(boolean value) {}
     void buildBubble(boolean force) {}
     void rebuildLayout() { rebuilds++; }
+    void prepareLayout() { rebuildLayout(); }
     void onDestroy() {}
     boolean isSupportedMessageContent(TdApi.Message msg, TdApi.MessageContent content) {
       return msg.content.getConstructor() == content.getConstructor();
@@ -138,8 +186,13 @@ public class MessageGroupingTest {
     MESSAGE_METHODS
   }
   static class MessagesAdapter {
+    static final int INITIAL_CAPACITY = 20;
+    MessagesManager manager;
     ArrayList<TGMessage> items = new ArrayList<>();
     Set<Integer> notified = new HashSet<>();
+    boolean hasUnreadSeparator() { return false; }
+    TGMessage getBottomMessage() { return getMessage(0); }
+    void notifyItemInserted(int index) { notifyItemChanged(index); }
     void notifyItemChanged(int index) {
       check(index >= 0 && index < items.size(), "Notification outside the message list");
       notified.add(index);
@@ -150,11 +203,18 @@ public class MessageGroupingTest {
     }
     ADAPTER_METHODS
   }
-  static class ThreadInfo { void updateReadInbox(TdApi.Message message) {} }
+  static class ThreadInfo {
+    void updateReadInbox(TdApi.Message message) {}
+    boolean hasUnreadMessages(TdApi.Chat chat) { return false; }
+  }
   static class Loader { ThreadInfo getMessageThread() { return null; } }
   static class MessagesManager {
     final MessagesAdapter adapter = new MessagesAdapter();
     final Loader loader = new Loader();
+    MessagesManager() { adapter.manager = this; }
+    boolean needRemoveDuplicates() { return false; }
+    boolean needSort() { return false; }
+    Controller controller() { return new Controller(); }
     MessagesAdapter getAdapter() { return adapter; }
     void updateReturnToMessageId(long oldId, long newId) {}
     void invalidateViewAt(int index) { adapter.notifyItemChanged(index); }
@@ -193,6 +253,13 @@ public class MessageGroupingTest {
   static void check(boolean condition, String reason) {
     if (!condition) throw new AssertionError(reason);
   }
+  static void group(TGMessage message, boolean basic) {
+    message.msg.chatId = basic ? -10 : -100;
+    message.chat = new TdApi.Chat();
+    message.chat.id = message.msg.chatId;
+    message.chat.type = basic ? new TdApi.ChatTypeBasicGroup(1) :
+                               new TdApi.ChatTypeSupergroup(1, false);
+  }
   static void matchesReopened(MessagesAdapter adapter) {
     int[] flags = new int[adapter.items.size()];
     int[] times = new int[flags.length], indices = new int[flags.length];
@@ -209,6 +276,82 @@ public class MessageGroupingTest {
     }
   }
   public static void main(String[] args) {
+    // Normal group sends have no senderTag until the server responds. They must
+    // merge at insertion, without invoking any send-success/acknowledgment callback.
+    MessagesManager live = history(100);
+    TGMessage previous = live.adapter.getItem(0);
+    group(previous, false);
+    previous.msg.sendingState = null;
+    previous.msg.senderTag = "Builder";
+    TGMessage pending = new TGMessage(message(2, 101, 1, true));
+    group(pending, false);
+    pending.msg.senderTag = "";
+    live.adapter.addMessageImpl(pending, false, true);
+    check(!pending.hasHeader() && !previous.drawnTail,
+      "Group bubbles must join immediately while the new message is still pending");
+    check(pending.msg.sendingState instanceof TdApi.MessageSendingStatePending,
+      "Do not wait for send confirmation to group bubbles");
+    check(previous.msg.senderTag.equals("Builder") && pending.msg.senderTag.isEmpty(),
+      "Do not fabricate or overwrite historical sender tags");
+    matchesReopened(live.adapter);
+    TGMessage nextPending = new TGMessage(message(3, 102, 1, true));
+    group(nextPending, false);
+    live.adapter.addMessageImpl(nextPending, false, true);
+    check(!nextPending.hasHeader() && !pending.drawnTail && !previous.drawnTail,
+      "Several unconfirmed messages join the same group immediately");
+    matchesReopened(live.adapter);
+    TdApi.Message confirmed = message(20, 101, 1, false);
+    confirmed.chatId = -100; confirmed.senderTag = "Builder";
+    live.updateMessageSendSucceeded(confirmed, 2);
+    check(!previous.drawnTail && !pending.hasHeader(), "Confirmation keeps the grouping stable");
+    matchesReopened(live.adapter);
+
+    // Compare tags only where the header actually displays them. This also
+    // applies to pending messages whose role metadata arrived at different times.
+    for (boolean basic : new boolean[] {false, true}) {
+      TGMessage a = new TGMessage(message(1, 100, 1, false));
+      TGMessage b = new TGMessage(message(2, 101, 1, true));
+      group(a, basic); group(b, basic);
+      a.msg.senderTag = "Builder"; a.memberTag = basic ? "Builder" : null;
+      check(b.mergeWith(a, true), "Own group bubbles do not display member tags");
+      a.administrator = new TdApi.ChatAdministrator(1, "Moderator", false, false);
+      check(b.mergeWith(a, true), "Hidden administrator labels do not separate own bubbles");
+    }
+
+    TGMessage tagged = new TGMessage(message(1, 100, 1, false));
+    TGMessage changedTag = new TGMessage(message(2, 101, 1, false));
+    group(tagged, false); group(changedTag, false);
+    tagged.msg.senderTag = "Builder"; changedTag.msg.senderTag = "Designer";
+    tagged.msg.isOutgoing = changedTag.msg.isOutgoing = false;
+    check(!changedTag.mergeWith(tagged, true), "Visible incoming tags still separate groups");
+    changedTag.msg.senderTag = "Builder";
+    check(changedTag.mergeWith(tagged, true), "Matching incoming tags still merge");
+    tagged.msg.isOutgoing = changedTag.msg.isOutgoing = true;
+    tagged.bubbles = changedTag.bubbles = false;
+    changedTag.msg.senderTag = "Designer";
+    check(!changedTag.mergeWith(tagged, true), "Visible classic headers retain tag boundaries");
+    tagged.bubbles = changedTag.bubbles = true;
+    tagged.msg.viaBotUserId = changedTag.msg.viaBotUserId = 7;
+    check(!changedTag.mergeWith(tagged, true), "Inline bot headers retain tag boundaries");
+    tagged.msg.viaBotUserId = changedTag.msg.viaBotUserId = 0;
+    tagged.msg.senderId = new TdApi.MessageSenderChat(-100);
+    changedTag.msg.senderId = new TdApi.MessageSenderChat(-100);
+    tagged.msg.authorSignature = "Moderator"; changedTag.msg.authorSignature = "Other admin";
+    check(!changedTag.mergeWith(tagged, true), "Anonymous admin headers retain signature boundaries");
+    changedTag.msg.authorSignature = "Moderator";
+    check(changedTag.mergeWith(tagged, true), "Matching anonymous admin headers still merge");
+
+    live = history(100);
+    previous = live.adapter.getItem(0);
+    pending = new TGMessage(message(2, 101, 1, true));
+    live.adapter.addMessageImpl(pending, false, true);
+    check(!pending.hasHeader() && !previous.drawnTail, "Private chats still group at insertion");
+    matchesReopened(live.adapter);
+    TGMessage otherSender = new TGMessage(message(3, 102, 2, true));
+    live.adapter.addMessageImpl(otherSender, false, true);
+    check(otherSender.hasHeader() && pending.drawnTail, "Different senders still stay separate");
+    matchesReopened(live.adapter);
+
     // A temporary timestamp prevents grouping; confirmation must remove the older tail.
     MessagesManager manager = history(100, 2000);
     TGMessage older = manager.adapter.getItem(1), newest = manager.adapter.getItem(0);
