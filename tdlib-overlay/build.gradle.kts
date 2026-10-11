@@ -1,3 +1,5 @@
+import org.gradle.kotlin.dsl.support.uppercaseFirstChar
+import tgx.gradle.ndkVersionToMinSdk
 import tgx.gradle.task.BuildTdlibOverlayTask
 import tgx.gradle.task.GenerateTdlibOverlayTask
 import java.util.Properties
@@ -48,21 +50,30 @@ androidComponents.onVariants { variant ->
 
 mapOf("Primary" to versions.getProperty("version.ndk_primary"),
       "Legacy" to versions.getProperty("version.ndk_legacy")).forEach { (kind, ndk) ->
-  mapOf("Arm64" to "arm64-v8a", "Arm32" to "armeabi-v7a", "X64" to "x86_64", "X86" to "x86")
-    .filter { kind != "Legacy" || it.value in setOf("armeabi-v7a", "x86") }
-    .forEach { (name, targetAbi) ->
-      tasks.register<BuildTdlibOverlayTask>("buildTdlib$kind$name") {
-        group = "Setup"
-        description = "Builds patched TDLib JNI for $targetAbi with NDK $ndk"
-        dependsOn(generateTdlib)
-        rootDir.set(repository)
-        sdkDir.set(androidComponents.sdkComponents.sdkDirectory)
-        sourceFiles.from(sourceInputs)
-        jobs.set(nativeJobs)
-        ndkVersion.set(ndk)
-        abi.set(targetAbi)
-        opensslFiles.from(fileTree(repository.dir("tdlib/openssl/$ndk/$targetAbi")))
-        nativeOutputDir.set(layout.buildDirectory.dir("native/$ndk/$targetAbi"))
+  Sdk.VARIANTS.values.filter { it.usesLegacyNdk == (kind == "Legacy") }.forEach { sdk ->
+    mapOf("Arm64" to "arm64-v8a", "Arm32" to "armeabi-v7a", "X64" to "x86_64", "X86" to "x86")
+      .filter { kind != "Legacy" || it.value in setOf("armeabi-v7a", "x86") }
+      .forEach abiTask@ { (name, targetAbi) ->
+        val abiMinSdk = if (targetAbi in setOf("arm64-v8a", "x86_64")) 21 else 16
+        val api = maxOf(sdk.minSdk, abiMinSdk)
+        if (api < ndk.ndkVersionToMinSdk()) return@abiTask
+        val platform = "android-$api"
+        tasks.register<BuildTdlibOverlayTask>(
+          "buildTdlib$kind${sdk.flavor.uppercaseFirstChar()}$name"
+        ) {
+          group = "Setup"
+          description = "Builds patched TDLib JNI for $targetAbi, $platform with NDK $ndk"
+          dependsOn(generateTdlib)
+          rootDir.set(repository)
+          sdkDir.set(androidComponents.sdkComponents.sdkDirectory)
+          sourceFiles.from(sourceInputs)
+          jobs.set(nativeJobs)
+          ndkVersion.set(ndk)
+          androidApi.set(api)
+          abi.set(targetAbi)
+          opensslFiles.from(fileTree(repository.dir("tdlib/openssl/$ndk/$platform/$targetAbi")))
+          nativeOutputDir.set(layout.buildDirectory.dir("native/$ndk/$platform/$targetAbi"))
+        }
       }
-    }
+  }
 }

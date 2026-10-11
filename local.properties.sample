@@ -7,6 +7,9 @@
 # Path to Android SDK
 sdk.dir=
 
+# Location of the MSYS2. This is only used on Windows.
+msys2.dir=
+
 ## Path to the keystore file
 keystore.file=
 
@@ -32,9 +35,5 @@ app.download_url=https://telegram.org/dlx
 telegram.api_id=
 telegram.api_hash=
 
-## Obtain credentials to access YouTube API:
-# https://developers.google.com/youtube/android/player/register
-youtube.api_key=
-
-## Extension module to apply.
+## Extension module to apply. One of: none, hms
 tgx.extension=none

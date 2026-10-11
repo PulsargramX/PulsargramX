@@ -59,7 +59,7 @@ import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.mediaview.crop.CropEffectFactory;
 import org.thunderdog.challegram.mediaview.crop.CropState;
 import org.thunderdog.challegram.telegram.Tdlib;
-import org.thunderdog.challegram.tool.UI;
+import org.thunderdog.challegram.unsorted.AppContext;
 import org.thunderdog.challegram.unsorted.Settings;
 
 import java.io.File;
@@ -369,7 +369,7 @@ public class VideoGen {
         onFailure.runWithData(new IllegalStateException("Video avatars require the modern video converter"));
         U.run(after);
       } else if (Config.LEGACY_VIDEO_TRANSCODING_ENABLED) {
-        legacyConvertVideoComplex(this, UI.getAppContext(), sourcePath, destinationPath, info, entry, onProgress, onComplete, onCancel, onFailure, after);
+        legacyConvertVideoComplex(this, AppContext.get(), sourcePath, destinationPath, info, entry, onProgress, onComplete, onCancel, onFailure, after);
       } else {
         onFailure.runWithData(new RuntimeException());
       }
@@ -401,7 +401,7 @@ public class VideoGen {
     if (videoLimit == null)
       videoLimit = new Settings.VideoLimit();
 
-    int inputVideoFrameRate = getVideoFrameRate(UI.getAppContext(), sourcePath);
+    int inputVideoFrameRate = getVideoFrameRate(AppContext.get(), sourcePath);
     int outputVideoFrameRate = videoLimit.getOutputFrameRate(inputVideoFrameRate);
 
     int outputVideoSquare;
@@ -477,7 +477,7 @@ public class VideoGen {
 
     // Transformer
     final AtomicBoolean transformFinished = new AtomicBoolean();
-    Transformer.Builder transformerBuilder = new Transformer.Builder(UI.getAppContext())
+    Transformer.Builder transformerBuilder = new Transformer.Builder(AppContext.get())
       .setVideoMimeType(MimeTypes.VIDEO_H264)
       .addListener(new Transformer.Listener() {
         @Override
@@ -506,7 +506,7 @@ public class VideoGen {
       VideoEncoderSettings videoEncoderSettings = new VideoEncoderSettings.Builder()
         .setBitrate((int) outputVideoBitrate)
         .build();
-      transformerBuilder.setEncoderFactory(new DefaultEncoderFactory.Builder(UI.getAppContext())
+      transformerBuilder.setEncoderFactory(new DefaultEncoderFactory.Builder(AppContext.get())
         .setRequestedVideoEncoderSettings(videoEncoderSettings)
         .build());
     }

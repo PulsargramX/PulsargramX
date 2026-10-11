@@ -25,6 +25,7 @@ import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibProfileMusic;
 import org.thunderdog.challegram.tool.UI;
+import org.thunderdog.challegram.unsorted.AppContext;
 import java.util.*;
 public class AudioController {
  private static final int PLAYBACK_MODE_EXOPLAYER_LIST=3;
@@ -86,6 +87,8 @@ public class AudioController {
 '''
 
 STUBS = {
+  'org/thunderdog/challegram/unsorted/AppContext.java': '''package org.thunderdog.challegram.unsorted;
+public class AppContext { public static Object get() { return null; } }''',
   'androidx/annotation/NonNull.java': 'package androidx.annotation; public @interface NonNull {}',
   'androidx/media3/common/C.java': '''package androidx.media3.common;
 public class C { public static final long TIME_UNSET=-9223372036854775807L; }''',

@@ -131,7 +131,7 @@ def dependencies(source, destination, revision, nested=False):
       dependencies(source / path, destination / path, commit, nested=True)
 
 
-def java21():
+def java25():
   candidates = [Path(os.environ.get("JAVA_HOME", "/nonexistent"))]
   executable = shutil.which("java")
   if executable:
@@ -141,7 +141,7 @@ def java21():
     if not (candidate / "bin/java").is_file():
       continue
     version = run(str(candidate / "bin/java"), "-version").decode()
-    if re.search(r'version "21[.\"]', version):
+    if re.search(r'version "25[.\"]', version):
       return candidate
   return None
 
@@ -194,9 +194,9 @@ def report_failure(error, log):
 
 
 def worker(project, cache, edition):
-  jdk = java21()
+  jdk = java25()
   if not jdk:
-    raise BuildError("JDK 21 is required; install it in the selected build environment.")
+    raise BuildError("JDK 25 is required; install it in the selected build environment.")
   os.environ["JAVA_HOME"] = str(jdk)
   os.environ["PATH"] = str(jdk / "bin") + os.pathsep + os.environ["PATH"]
   local = RELEASE.read_properties(project / "local.properties")
@@ -235,9 +235,9 @@ def worker(project, cache, edition):
     os.environ["CMAKE_CXX_COMPILER_LAUNCHER"] = shutil.which("ccache")
     os.environ.setdefault("CCACHE_MAXSIZE", "512M")
   ndk = version["version.ndk_primary"]
-  binaries = [f"src/main/libs/{ndk}/libs/arm64-v8a/libtdjni.so",
-              f"openssl/{ndk}/arm64-v8a/lib/libcryptox.so",
-              f"openssl/{ndk}/arm64-v8a/lib/libsslx.so"]
+  binaries = [f"src/main/libs/{ndk}/android-24/arm64-v8a/libtdjni.so",
+              f"openssl/{ndk}/android-24/arm64-v8a/lib/libcryptox.so",
+              f"openssl/{ndk}/android-24/arm64-v8a/lib/libsslx.so"]
   if invalid_binaries(project, binaries):
     if not shutil.which("git-lfs"):
       raise BuildError("Git LFS is required in the build environment to hydrate TDLib.")
@@ -282,7 +282,7 @@ def main():
     "Success prints only the absolute APK path. Builds committed HEAD by default; "
     "--working-tree includes tracked edits (stage new files first). "
     "Private cache and logs: build/local-apk, or TGX_BUILD_CACHE_DIR. "
-    "Requires configured local.properties, Android SDK, and JDK 21 on the host "
+    "Requires configured local.properties, Android SDK, and JDK 25 on the host "
     "or in the configured development container."
   ))
   parser.add_argument("--edition", choices=("personal", "public"), default="personal",
@@ -369,9 +369,9 @@ def main():
           apply_working_patch(project, saved_patch, patch)
         command = [sys.executable, str(Path(__file__).resolve()), "--edition", args.edition, "--worker",
                    str(project), str(cache)]
-        if args.container != "host" and (args.container != "auto" or not java21()):
+        if args.container != "host" and (args.container != "auto" or not java25()):
           if not shutil.which("distrobox"):
-            raise BuildError("JDK 21 is missing on the host and Distrobox is unavailable.")
+            raise BuildError("JDK 25 is missing on the host and Distrobox is unavailable.")
           container_file = SOURCE / ".personal/container"
           default_container = (container_file.read_text().strip() if container_file.is_file()
                                else os.environ.get("TGX_BUILD_CONTAINER", "client-dev"))

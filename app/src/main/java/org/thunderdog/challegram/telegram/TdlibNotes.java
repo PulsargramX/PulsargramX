@@ -4,7 +4,7 @@ import android.content.SharedPreferences;
 
 import org.json.JSONException;
 import org.thunderdog.challegram.config.ClientIdentity;
-import org.thunderdog.challegram.tool.UI;
+import org.thunderdog.challegram.unsorted.AppContext;
 import org.thunderdog.challegram.unsorted.Settings;
 import org.thunderdog.challegram.util.NotesBackup;
 
@@ -32,7 +32,7 @@ public final class TdlibNotes {
 
   TdlibNotes (Tdlib tdlib) {
     this(tdlib.id(), () -> tdlib.myUserId(true), () -> tdlib.account().isDebug(),
-      new SettingsStorage(), UI.getAppContext().getCacheDir());
+      new SettingsStorage(), AppContext.get().getCacheDir());
   }
 
   TdlibNotes (int accountId, LongSupplier userId, BooleanSupplier testDc, Storage storage, File cache) {

@@ -103,21 +103,24 @@ def generate(args, build, env, cmake, ninja, log):
 
 def native(args, build, source, revision, env, cmake, ninja, log):
   ndk = args.sdk / "ndk" / args.ndk
-  openssl = args.root / "tdlib/openssl" / args.ndk / args.abi
+  platform = "android-" + str(args.api)
+  openssl = args.root / "tdlib/openssl" / args.ndk / platform / args.abi
   crypto = openssl / "lib/libcryptox.so"
   ssl = openssl / "lib/libsslx.so"
   for path in (crypto, ssl):
-    if not path.is_file() or path.open("rb").read(4) != b"\x7fELF":
+    if not path.is_file():
       raise RuntimeError(f"Hydrate the pinned OpenSSL LFS binary: {path}")
-  state = build / "native-build" / args.ndk / args.abi
-  output = build / "native" / args.ndk / args.abi
+    with path.open("rb") as binary:
+      if binary.read(4) != b"\x7fELF":
+        raise RuntimeError(f"Hydrate the pinned OpenSSL LFS binary: {path}")
+  state = build / "native-build" / args.ndk / platform / args.abi
+  output = build / "native" / args.ndk / platform / args.abi
   major = int(args.ndk.split(".")[0])
-  api = 21 if major >= 26 or args.abi in ("arm64-v8a", "x86_64") else 16
   stl = "c++_shared" if major >= 27 else "c++_static"
   command([cmake, "-S", source / "example/android", "-B", state, "-G", "Ninja",
     "-DCMAKE_TOOLCHAIN_FILE=" + str(ndk / "build/cmake/android.toolchain.cmake"),
     "-DCMAKE_MAKE_PROGRAM=" + str(ninja), "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
-    "-DANDROID_ABI=" + args.abi, "-DANDROID_PLATFORM=android-" + str(api),
+    "-DANDROID_ABI=" + args.abi, "-DANDROID_PLATFORM=" + platform,
     "-DANDROID_STL=" + stl, "-DTD_GIT_COMMIT_HASH=" + revision,
     "-DOPENSSL_ROOT_DIR=" + str(openssl), "-DOPENSSL_INCLUDE_DIR=" + str(openssl / "include"),
     "-DOPENSSL_CRYPTO_LIBRARY=" + str(crypto), "-DOPENSSL_SSL_LIBRARY=" + str(ssl),
@@ -126,7 +129,7 @@ def native(args, build, source, revision, env, cmake, ninja, log):
   output.mkdir(parents=True, exist_ok=True)
   shutil.copy2(state / "libtdjni.so", output / "libtdjni.so")
   (output / "revision.json").write_text(json.dumps({"revision": revision,
-    "ndk": args.ndk, "abi": args.abi}, indent=2) + "\n")
+    "ndk": args.ndk, "api": args.api, "abi": args.abi}, indent=2) + "\n")
 
 
 def main():
@@ -136,6 +139,7 @@ def main():
   parser.add_argument("--sdk", type=Path)
   parser.add_argument("--jobs", type=int, default=2)
   parser.add_argument("--ndk")
+  parser.add_argument("--api", type=int)
   parser.add_argument("--abi", choices=("arm64-v8a", "armeabi-v7a", "x86", "x86_64"))
   args = parser.parse_args()
   args.root = args.root.resolve()
@@ -143,8 +147,9 @@ def main():
     local = properties(args.root / "local.properties")
     args.sdk = Path(local["sdk.dir"].replace("\\:", ":").replace("\\\\", "\\"))
   args.sdk = args.sdk.resolve()
-  if args.jobs <= 0 or (args.mode == "native" and not (args.ndk and args.abi)):
-    parser.error("positive --jobs and, for native, --ndk and --abi are required")
+  if args.jobs <= 0 or (args.mode == "native" and
+                       not (args.ndk and args.abi and args.api and args.api >= 16)):
+    parser.error("positive --jobs and, for native, --ndk, --abi and --api >= 16 are required")
   version = properties(args.root / "version.properties")
   tools = args.sdk / "cmake" / version["version.cmake"] / "bin"
   cmake, ninja = tools / "cmake", tools / "ninja"
@@ -156,7 +161,8 @@ def main():
   build.mkdir(parents=True, exist_ok=True)
   logs = build / "logs"
   logs.mkdir(exist_ok=True)
-  name = args.mode if args.mode == "generate" else "native-" + args.ndk + "-" + args.abi
+  name = (args.mode if args.mode == "generate" else
+          "native-" + args.ndk + "-android-" + str(args.api) + "-" + args.abi)
   with (build / ".build.lock").open("w") as lock, (logs / (name + ".log")).open("w") as log:
     # Host generation writes into its source tree; serialize it with ABI consumers.
     fcntl.flock(lock, fcntl.LOCK_EX)

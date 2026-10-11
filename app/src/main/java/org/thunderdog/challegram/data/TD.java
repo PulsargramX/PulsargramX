@@ -92,6 +92,7 @@ import org.thunderdog.challegram.tool.TGMimeType;
 import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.ui.HashtagController;
 import org.thunderdog.challegram.ui.ShareController;
+import org.thunderdog.challegram.unsorted.AppContext;
 import org.thunderdog.challegram.util.CustomTypefaceSpan;
 import org.thunderdog.challegram.util.Permissions;
 import org.thunderdog.challegram.util.text.Letters;
@@ -3171,11 +3172,11 @@ public class TD {
     if (allowExternal) {
       String state = Environment.getExternalStorageState();
       if (Environment.MEDIA_MOUNTED.equals(state) && !Environment.isExternalStorageEmulated()) {
-        dir = UI.getAppContext().getExternalCacheDir();
+        dir = AppContext.get().getExternalCacheDir();
       }
     }
     if (dir == null) {
-      dir = UI.getAppContext().getCacheDir();
+      dir = AppContext.get().getCacheDir();
     }
     return dir;
   }
@@ -3189,7 +3190,7 @@ public class TD {
       String dirPath = Environment.getExternalStorageDirectory().getPath() + "/Challegram";
       dir = new File(dirPath);
     } else {
-      dir = new File(UI.getAppContext().getFilesDir().getPath() + "/Challegram");
+      dir = new File(AppContext.get().getFilesDir().getPath() + "/Challegram");
     }
 
     if (!FileUtils.createDirectory(dir)) {
@@ -4559,7 +4560,7 @@ public class TD {
       return destFile;
     }
 
-    final DownloadManager downloadManager = (DownloadManager) UI.getAppContext().getSystemService(Context.DOWNLOAD_SERVICE);
+    final DownloadManager downloadManager = (DownloadManager) AppContext.get().getSystemService(Context.DOWNLOAD_SERVICE);
     String name = destFile.getName();
     String mimeType = file.mimeType;
     if (StringUtils.isEmpty(mimeType)) {
@@ -4600,7 +4601,7 @@ public class TD {
     if (!FileUtils.copy(sourceFile, destFile))
       return;
     UI.post(() -> {
-      final DownloadManager downloadManager = (DownloadManager) UI.getAppContext().getSystemService(Context.DOWNLOAD_SERVICE);
+      final DownloadManager downloadManager = (DownloadManager) AppContext.get().getSystemService(Context.DOWNLOAD_SERVICE);
       if (downloadManager != null) {
         Background.instance().post(() -> {
           try {

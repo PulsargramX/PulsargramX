@@ -6,9 +6,11 @@ import hashlib
 import io
 import os
 from pathlib import Path
+import re
 import subprocess
 import shutil
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -16,6 +18,82 @@ SCRIPTS = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("build_apk", SCRIPTS / "build-apk.py")
 BUILD = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BUILD)
+
+OVERLAY_SPEC = importlib.util.spec_from_file_location(
+  "tdlib_overlay", SCRIPTS / "build-tdlib-overlay.py")
+OVERLAY = importlib.util.module_from_spec(OVERLAY_SPEC)
+OVERLAY_SPEC.loader.exec_module(OVERLAY)
+
+
+class UpstreamBuildCompatibilityTest(unittest.TestCase):
+  def test_variant_helpers_reference_declared_abis(self):
+    root = SCRIPTS.parent
+    config = (root / "buildSrc/src/main/kotlin/Config.kt").read_text()
+    abi = config.split("object Abi {", 1)[1].split("\n}", 1)[0]
+    declared = set(re.findall(r"\bval ([A-Z][A-Z_0-9]*)", abi))
+    references = set(re.findall(r"\bAbi\.([A-Z][A-Z_0-9]*)",
+                               config + (root / "app/build.gradle.kts").read_text()))
+    self.assertEqual(references - declared, set())
+
+  def test_context_callers_do_not_use_the_removed_upstream_methods(self):
+    for path in (SCRIPTS.parent / "app/src").rglob("*"):
+      if path.suffix not in (".java", ".kt"):
+        continue
+      with self.subTest(source=str(path.relative_to(SCRIPTS.parent))):
+        source = re.sub(r"/\*.*?\*/", "", path.read_text(), flags=re.S)
+        self.assertNotIn("UI.getAppContext(", source)
+        self.assertNotIn("UI.initApp(", source)
+        self.assertNotIn("TdlibNotificationUtils.getDeviceTokenRetriever(", source)
+
+  def test_call_library_links_the_renderer_implementation(self):
+    cmake = (SCRIPTS.parent / "app/jni/tgvoip/BuildTgCalls.cmake").read_text()
+    self.assertIn("/group/StreamingAudioRenderer.cpp", cmake)
+    self.assertNotIn("/group/StreamingAudioRendererTest.cpp", cmake)
+
+  def test_java25_selection_skips_an_older_java_home(self):
+    with tempfile.TemporaryDirectory() as directory:
+      root = Path(directory)
+      older, current = root / "jdk21", root / "jdk25"
+      for jdk in (older, current):
+        (jdk / "bin").mkdir(parents=True)
+        (jdk / "bin/java").touch()
+      def version(executable, *args):
+        return b'openjdk version "21.0.1"' if str(older) in executable else b'openjdk version "25.0.1"'
+      with patch.dict(os.environ, JAVA_HOME=str(older)), \
+           patch.object(BUILD.shutil, "which", return_value=str(current / "bin/java")), \
+           patch.object(BUILD.Path, "glob", return_value=[]), \
+           patch.object(BUILD, "run", side_effect=version):
+        self.assertEqual(BUILD.java25(), current)
+
+  def test_native_platforms_use_matching_crypto_and_separate_outputs(self):
+    with tempfile.TemporaryDirectory() as directory:
+      root = Path(directory)
+      build, ndk, abi = root / "output", "30.0.16248370", "arm64-v8a"
+      commands = []
+      def command(arguments, *args):
+        commands.append([str(arg) for arg in arguments])
+        if "--build" in arguments:
+          state = Path(arguments[arguments.index("--build") + 1])
+          state.mkdir(parents=True, exist_ok=True)
+          (state / "libtdjni.so").write_bytes(str(state).encode())
+      for api in (23, 24):
+        platform = f"android-{api}"
+        crypto = root / "tdlib/openssl" / ndk / platform / abi
+        (crypto / "lib").mkdir(parents=True)
+        for library in ("libcryptox.so", "libsslx.so"):
+          (crypto / "lib" / library).write_bytes(b"\x7fELF")
+        arguments = SimpleNamespace(root=root, sdk=root / "sdk", ndk=ndk,
+                                    abi=abi, api=api, jobs=2)
+        with patch.object(OVERLAY, "command", side_effect=command):
+          OVERLAY.native(arguments, build, root / "source", "revision", {},
+                         "cmake", "ninja", None)
+        self.assertIn(f"-DANDROID_PLATFORM={platform}", commands[-2])
+        self.assertIn("-DOPENSSL_ROOT_DIR=" + str(crypto), commands[-2])
+      first = build / "native" / ndk / "android-23" / abi / "libtdjni.so"
+      second = build / "native" / ndk / "android-24" / abi / "libtdjni.so"
+      self.assertTrue(first.is_file())
+      self.assertTrue(second.is_file())
+      self.assertNotEqual(first.read_bytes(), second.read_bytes())
 
 
 class QuietGradleTest(unittest.TestCase):

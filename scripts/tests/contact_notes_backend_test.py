@@ -15,6 +15,7 @@ BASE = Path(os.environ.get('TMPDIR', '/tmp')) / 'client-note-tests'
 WORK = BASE / 'cloud-backend'
 JDK = Path(os.environ.get('NOTE_TEST_JDK', str(BASE / 'jdk-17.0.20.1+1')))
 STUBS = {
+'org/thunderdog/challegram/unsorted/AppContext.java': '''package org.thunderdog.challegram.unsorted; public final class AppContext { public static org.thunderdog.challegram.tool.UI.Context get(){return new org.thunderdog.challegram.tool.UI.Context();} }''',
 'tgx/td/ChatId.java': '''package tgx.td;
 // Focused Java translation of checked-in vkryl/td/src/main/kotlin/tgx/td/ChatId.kt.
 public final class ChatId {

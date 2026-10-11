@@ -21,6 +21,7 @@ import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.component.location.OpenStreetMapStyles;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.UI;
+import org.thunderdog.challegram.unsorted.AppContext;
 import org.thunderdog.challegram.unsorted.Settings;
 
 import java.util.ArrayDeque;
@@ -91,12 +92,12 @@ public final class ImageFileMap extends ImageFileLocal {
     private void start () {
       started = SystemClock.uptimeMillis();
       try {
-        OpenStreetMapStyles.initialize(UI.getAppContext());
+        OpenStreetMapStyles.initialize(AppContext.get());
         float scale = Math.min(2f, Screen.density());
         float resize = Math.min(1f, 1024f / Math.max(file.width, file.height));
         int width = Math.max(32, Math.round(file.width * resize / scale));
         int height = Math.max(32, Math.round(file.height * resize / scale));
-        snapshotter = new MapSnapshotter(UI.getAppContext(), new MapSnapshotter.Options(width, height)
+        snapshotter = new MapSnapshotter(AppContext.get(), new MapSnapshotter.Options(width, height)
           .withPixelRatio(scale)
           .withStyleBuilder(OpenStreetMapStyles.style(Settings.MAP_TYPE_DEFAULT))
           .withCameraPosition(new CameraPosition.Builder()

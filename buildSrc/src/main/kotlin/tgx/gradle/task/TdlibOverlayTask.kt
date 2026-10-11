@@ -41,9 +41,11 @@ abstract class GenerateTdlibOverlayTask : TdlibOverlayTask() {
 @DisableCachingByDefault(because = "JNI compilation uses persistent local CMake state")
 abstract class BuildTdlibOverlayTask : TdlibOverlayTask() {
   @get:Input abstract val ndkVersion: Property<String>
+  @get:Input abstract val androidApi: Property<Int>
   @get:Input abstract val abi: Property<String>
   @get:InputFiles @get:PathSensitive(PathSensitivity.RELATIVE)
   abstract val opensslFiles: ConfigurableFileCollection
   @get:OutputDirectory abstract val nativeOutputDir: DirectoryProperty
-  @TaskAction fun build() = run("native", "--ndk", ndkVersion.get(), "--abi", abi.get())
+  @TaskAction fun build() = run("native", "--ndk", ndkVersion.get(),
+    "--api", androidApi.get().toString(), "--abi", abi.get())
 }

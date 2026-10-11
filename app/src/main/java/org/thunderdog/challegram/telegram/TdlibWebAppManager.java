@@ -32,6 +32,7 @@ import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.tool.Intents;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.UI;
+import org.thunderdog.challegram.unsorted.AppContext;
 import org.thunderdog.challegram.ui.ChatsController;
 import org.thunderdog.challegram.ui.MessagesController;
 import org.thunderdog.challegram.ui.WebAppController;
@@ -134,8 +135,8 @@ public final class TdlibWebAppManager {
           return;
         }
         Settings.instance().remove(consentKey(botId));
-        org.thunderdog.challegram.component.webapp.WebAppActions.clearBotData(UI.getAppContext(), tdlib, botId);
-        org.thunderdog.challegram.component.webapp.WebAppDevice.forget(UI.getAppContext(), tdlib, botId, () -> {
+        org.thunderdog.challegram.component.webapp.WebAppActions.clearBotData(AppContext.get(), tdlib, botId);
+        org.thunderdog.challegram.component.webapp.WebAppDevice.forget(AppContext.get(), tdlib, botId, () -> {
           clearingBots.remove(botId);
           notifyChanged();
           if (onDone != null && version == generation && userId == tdlib.myUserId()) onDone.run();
@@ -290,8 +291,8 @@ public final class TdlibWebAppManager {
       if (loggingOut) {
         Settings.instance().removeByPrefix("webapp_consent_" + tdlib.id() + "_", null);
         afterControllersDestroyed(0, () -> {
-          org.thunderdog.challegram.component.webapp.WebAppDevice.forgetAccount(UI.getAppContext(), tdlib, null);
-          org.thunderdog.challegram.component.webapp.WebAppActions.clearBotData(UI.getAppContext(), tdlib, 0);
+          org.thunderdog.challegram.component.webapp.WebAppDevice.forgetAccount(AppContext.get(), tdlib, null);
+          org.thunderdog.challegram.component.webapp.WebAppActions.clearBotData(AppContext.get(), tdlib, 0);
         });
       }
       for (WebAppSession session : new ArrayList<>(sessions)) {

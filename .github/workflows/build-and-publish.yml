@@ -110,13 +110,13 @@ jobs:
 
           ndk_version=$(./scripts/read-property.sh version.properties version.ndk_primary)
           git -C tdlib lfs pull \
-            --include="src/main/libs/$ndk_version/libs/arm64-v8a/libtdjni.so,openssl/$ndk_version/arm64-v8a/lib/libcryptox.so,openssl/$ndk_version/arm64-v8a/lib/libsslx.so"
+            --include="src/main/libs/$ndk_version/android-24/arm64-v8a/libtdjni.so,openssl/$ndk_version/android-24/arm64-v8a/lib/libcryptox.so,openssl/$ndk_version/android-24/arm64-v8a/lib/libsslx.so"
       
-      - name: Set up JDK 21
+      - name: Set up JDK 25
         uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
-          java-version: '21'
+          java-version: '25'
 
       - name: Check public policies and release helpers
         run: |
