@@ -6409,7 +6409,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     return BitwiseUtils.hasFlag(flags, MESSAGE_FLAG_BELOW_HEADER);
   }
 
-  private boolean isBottomMessage () {
+  public boolean isBottomMessage () {
     return (flags & MESSAGE_FLAG_IS_BOTTOM) != 0;
   }
 

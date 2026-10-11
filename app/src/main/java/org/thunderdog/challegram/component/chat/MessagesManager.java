@@ -2119,12 +2119,9 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
     if (index != -1) {
       TGMessage msg = adapter.getItem(index);
       switch (msg.setSendSucceeded(message, oldMessageId)) {
-        case TGMessage.MESSAGE_INVALIDATED: {
-          invalidateViewAt(index);
-          break;
-        }
+        case TGMessage.MESSAGE_INVALIDATED:
         case TGMessage.MESSAGE_CHANGED: {
-          getAdapter().notifyItemChanged(index);
+          adapter.updateMessageMerging(index);
           break;
         }
         case TGMessage.MESSAGE_REPLACE_REQUIRED: {
@@ -2176,7 +2173,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
     updateReturnToMessageId(oldMessageId, message.id);
     int index = adapter.indexOfMessageContainer(oldMessageId);
     if (index != -1 && adapter.getItem(index).setSendFailed(message, oldMessageId)) {
-      invalidateViewAt(index);
+      adapter.updateMessageMerging(index);
 
       ThreadInfo messageThread = loader.getMessageThread();
       if (messageThread != null) {

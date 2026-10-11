@@ -227,22 +227,34 @@ public class MessagesAdapter extends RecyclerView.Adapter<MessagesHolder> {
     if (items != null) {
       items.get(index).onDestroy();
       items.set(index, msg);
-      boolean includeTop = index > 0;
-      if (includeTop) {
-        TGMessage bottomMessage = items.get(index - 1);
-        bottomMessage.mergeWith(msg, index == 1);
-        bottomMessage.rebuildLayout();
-      }
-      if (index + 1 < items.size()) {
-        msg.mergeWith(items.get(index + 1), index == 0);
-        msg.rebuildLayout();
-        notifyItemRangeChanged(includeTop ? index - 1 : index, includeTop ? 3 : 2);
-      } else {
-        msg.mergeWith(null, index == 0);
-        msg.rebuildLayout();
-        notifyItemRangeChanged(includeTop ? index - 1 : index, includeTop ? 2 : 1);
+      updateMessageMerging(index);
+    }
+  }
+
+  public void updateMessageMerging (int index) {
+    if (getMessage(index) == null) {
+      return;
+    }
+    int firstChangedIndex = index;
+    // Newer messages inherit their group's starting time and merge count.
+    for (int i = index; i >= 0; i--) {
+      TGMessage message = getMessage(i);
+      boolean wasMerged = message.getMergeIndex() != 0;
+      boolean wasBottom = message.isBottomMessage();
+      boolean isMerged = message.mergeWith(getMessage(i + 1), i == 0);
+      firstChangedIndex = i;
+      if (i < index && !wasMerged && !isMerged) {
+        // The next group is unchanged; retain its connection to newer messages.
+        message.setIsBottom(wasBottom);
+        break;
       }
     }
+    // mergeWith also updates the older message's bottom corners and padding.
+    int lastChangedIndex = Math.min(index + 1, getMessageCount() - 1);
+    for (int i = lastChangedIndex; i >= firstChangedIndex; i--) {
+      getMessage(i).rebuildLayout();
+    }
+    notifyItemRangeChanged(firstChangedIndex, lastChangedIndex - firstChangedIndex + 1);
   }
 
   public int getMessageCount () {
