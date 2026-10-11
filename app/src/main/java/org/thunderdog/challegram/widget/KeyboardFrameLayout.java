@@ -18,6 +18,7 @@ package org.thunderdog.challegram.widget;
 import android.content.Context;
 import android.os.SystemClock;
 import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
 import android.view.ViewTreeObserver;
@@ -25,6 +26,7 @@ import android.widget.RelativeLayout;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.core.view.ViewCompat;
 
 import org.thunderdog.challegram.tool.Keyboard;
 import org.thunderdog.challegram.tool.UI;
@@ -35,7 +37,7 @@ import me.vkryl.android.widget.FrameLayoutFix;
 import me.vkryl.core.BitwiseUtils;
 import me.vkryl.core.lambda.RunnableFloat;
 
-public class KeyboardFrameLayout extends FrameLayoutFix implements ViewTreeObserver.OnPreDrawListener, FactorAnimator.Target {
+public class KeyboardFrameLayout extends FrameLayoutFix implements ViewTreeObserver.OnPreDrawListener, View.OnAttachStateChangeListener, FactorAnimator.Target {
 
   private static final int FLAG_VISIBLE = 1;
   private static final int FLAG_HIDE_BY_DETACH_VIEW = 1 << 1;
@@ -44,6 +46,7 @@ public class KeyboardFrameLayout extends FrameLayoutFix implements ViewTreeObser
   public final @NonNull KeyboardFrameLayoutContent contentView;
   private ViewGroup parentViewForAttachedMode;
   private ViewGroup parentViewForDetachedMode;
+  private ViewGroup parentViewForFreezeRender;
 
 
     public KeyboardFrameLayout (@NonNull Context context) {
@@ -58,7 +61,33 @@ public class KeyboardFrameLayout extends FrameLayoutFix implements ViewTreeObser
     this.parentViewForAttachedMode = parentViewForAttachedMode;
     this.parentViewForDetachedMode = parentViewForDetachedMode;
 
-    parentViewForFreezeRender.getViewTreeObserver().addOnPreDrawListener(this);
+    if (this.parentViewForFreezeRender != parentViewForFreezeRender) {
+      if (this.parentViewForFreezeRender != null) {
+        this.parentViewForFreezeRender.removeOnAttachStateChangeListener(this);
+        onViewDetachedFromWindow(this.parentViewForFreezeRender);
+      }
+      this.parentViewForFreezeRender = parentViewForFreezeRender;
+      parentViewForFreezeRender.addOnAttachStateChangeListener(this);
+      if (ViewCompat.isAttachedToWindow(parentViewForFreezeRender)) {
+        onViewAttachedToWindow(parentViewForFreezeRender);
+      }
+    }
+  }
+
+  @Override
+  public void onViewAttachedToWindow (View view) {
+    view.getViewTreeObserver().addOnPreDrawListener(this);
+  }
+
+  @Override
+  public void onViewDetachedFromWindow (View view) {
+    cancelKeyboardTransition();
+    // The emoji panel itself can detach while restoring the IME. Observe the
+    // chat/share parent, but release its window listener when that parent leaves.
+    ViewTreeObserver observer = view.getViewTreeObserver();
+    if (observer.isAlive()) {
+      observer.removeOnPreDrawListener(this);
+    }
   }
 
   public void useHideByDetachView () {

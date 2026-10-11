@@ -5671,6 +5671,13 @@ public class ProfileController extends ViewController<ProfileController.Args> im
       headerCell.setAllowTitleClick(chat.id);
       headerCell.setEmojiStatus(tdlib.chatUser(chat));
       headerCell.setExpandedSubtitle(makeSubtitle(true));
+      updateProfileAudio();
+    }
+  }
+
+  private void updateProfileAudio () {
+    if (headerCell != null && user != null) {
+      headerCell.setProfileAudio(user.id, userFull != null ? userFull.firstProfileAudio : null);
     }
   }
 
@@ -6506,7 +6513,8 @@ public class ProfileController extends ViewController<ProfileController.Args> im
         new TdApi.SearchMessagesFilterAudio(),
         new TdApi.SearchMessagesFilterAnimation(),
         new TdApi.SearchMessagesFilterVoiceNote(),
-        new TdApi.SearchMessagesFilterVideoNote()
+        new TdApi.SearchMessagesFilterVideoNote(),
+        new TdApi.SearchMessagesFilterPoll()
       });
     } else {
       return (filtersOrder = new TdApi.SearchMessagesFilter[]{
@@ -6516,7 +6524,8 @@ public class ProfileController extends ViewController<ProfileController.Args> im
         new TdApi.SearchMessagesFilterAudio(),
         new TdApi.SearchMessagesFilterAnimation(),
         new TdApi.SearchMessagesFilterVoiceNote(),
-        new TdApi.SearchMessagesFilterVideoNote()
+        new TdApi.SearchMessagesFilterVideoNote(),
+        new TdApi.SearchMessagesFilterPoll()
       });
     }
   }
@@ -6677,6 +6686,9 @@ public class ProfileController extends ViewController<ProfileController.Args> im
       return;
     }
     final boolean isUpdate = this.userFull != null;
+    TdApi.Audio previousMusic = isUpdate ? this.userFull.firstProfileAudio : null;
+    final boolean musicChanged = previousMusic == null ? userFull.firstProfileAudio != null :
+      userFull.firstProfileAudio == null || previousMusic.audio.id != userFull.firstProfileAudio.audio.id;
     this.userFull = userFull;
 
     if (!isUpdate) {
@@ -6684,6 +6696,7 @@ public class ProfileController extends ViewController<ProfileController.Args> im
     }
 
     tdlib.uiExecute(() -> {
+      if (isDestroyed()) return;
       if (isUpdate) {
         checkUserButtons();
         checkGroupsInCommon();
@@ -6694,6 +6707,10 @@ public class ProfileController extends ViewController<ProfileController.Args> im
         }
       } else {
         addFullCells(userFull);
+      }
+      if (mode == Mode.USER || mode == Mode.SECRET) {
+        updateProfileAudio();
+        if (musicChanged) tdlib.context().player().refreshProfileMusic(tdlib, user.id);
       }
       if (mode == Mode.USER && TD.isBot(user) && baseAdapter != null) {
         buildUserCells();
@@ -6768,6 +6785,8 @@ public class ProfileController extends ViewController<ProfileController.Args> im
             int count = getMediaCount(filter.getConstructor());
             if (count == 0) {
               switch (filter.getConstructor()) {
+                case TdApi.SearchMessagesFilterPoll.CONSTRUCTOR:
+                  return Lang.getString(R.string.TabEmptyPolls);
                 case TdApi.SearchMessagesFilterPhoto.CONSTRUCTOR:
                   return Lang.getString(R.string.TabEmptyPhotos);
                 case TdApi.SearchMessagesFilterDocument.CONSTRUCTOR:
@@ -6784,6 +6803,8 @@ public class ProfileController extends ViewController<ProfileController.Args> im
               }
             } else if (count > 0) {
               switch (filter.getConstructor()) {
+                case TdApi.SearchMessagesFilterPoll.CONSTRUCTOR:
+                  return Lang.pluralBold(R.string.xPolls, count);
                 case TdApi.SearchMessagesFilterAnimation.CONSTRUCTOR:
                   return Lang.pluralBold(R.string.xGIFs, count);
                 case TdApi.SearchMessagesFilterPhoto.CONSTRUCTOR:
@@ -7128,7 +7149,8 @@ public class ProfileController extends ViewController<ProfileController.Args> im
 
   @UiThread
   private void addMessage (TdApi.Message message) {
-    if (filterMediaMessage(message) && getChatId() == message.chatId) {
+    if (filterMediaMessage(message) && getChatId() == message.chatId &&
+        Td.matchesTopic(message.topicId, getTopicId())) {
       int filterConstructor = TD.makeFilterConstructor(message, false);
       if (filterConstructor != TdApi.SearchMessagesFilterEmpty.CONSTRUCTOR) {
         TdApi.SearchMessagesFilter[] filters = getFiltersOrder();

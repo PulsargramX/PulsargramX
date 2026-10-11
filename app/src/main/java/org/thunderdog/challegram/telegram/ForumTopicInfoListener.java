@@ -14,7 +14,7 @@ public interface ForumTopicInfoListener {
    * Note: unreadCount is not provided by TDLib's UpdateForumTopic - it needs to be
    * fetched separately via GetForumTopic when lastReadInboxMessageId changes.
    */
-  default void onForumTopicUpdated (long chatId, long messageThreadId, boolean isPinned, long lastReadInboxMessageId, long lastReadOutboxMessageId, int unreadMentionCount, int unreadReactionCount, TdApi.ChatNotificationSettings notificationSettings, @Nullable TdApi.DraftMessage draftMessage) { }
+  default void onForumTopicUpdated (long chatId, long messageThreadId, boolean isPinned, long lastReadInboxMessageId, long lastReadOutboxMessageId, int unreadMentionCount, int unreadReactionCount, int unreadPollVoteCount, TdApi.ChatNotificationSettings notificationSettings, @Nullable TdApi.DraftMessage draftMessage) { }
   /**
    * Called when the full forum topic data is refreshed (includes unreadCount).
    */

@@ -32,6 +32,8 @@ import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.telegram.GlobalMessageListener;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibManager;
+import org.thunderdog.challegram.telegram.TdlibProfileMusic;
+import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.ui.PlaybackController;
 import org.thunderdog.challegram.unsorted.Settings;
 
@@ -374,6 +376,9 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
 
   private int canAddToPlayListImpl (Tdlib tdlib, TdApi.Message track, int currentPosition, int existingIndex) {
     if (this.tdlib == tdlib && this.message != null && playState != STATE_NONE && this.message.content.getConstructor() == track.content.getConstructor()) {
+      if (profileMusicUserId != 0 && TdlibProfileMusic.userId(track) != profileMusicUserId) {
+        return ADD_MODE_NONE;
+      }
       if (existingIndex != -1) {
         if ((playListFlags & PLAYLIST_FLAG_REVERSE) != 0) {
           return existingIndex != currentPosition && currentPosition - 1 != existingIndex ? ADD_MODE_MOVE : ADD_MODE_NONE;
@@ -606,7 +611,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
 
   public final void removeTrackChangeListener (@NonNull TrackChangeListener listener) {
     synchronized (this) {
-      globalListeners.add(listener);
+      globalListeners.remove(listener);
     }
   }
 
@@ -1208,12 +1213,16 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
       } else {
         this.playlistMinMessageId = this.playlistMaxMessageId = 0;
       }
+      this.profileMusicUserId = 0;
+      this.profileMusicOffset = 0;
       this.playlistSearchQuery = null;
       this.playlistTopicId = null;
       this.playlistInlineQuery = null;
       this.playlistInlineNextOffset = this.playlistSearchNextOffset = null; this.playlistSearchNextFromMessageId = 0;
       this.removedMessageList.clear();
       if (playList != null) {
+        profileMusicUserId = playList.profileMusicUserId;
+        profileMusicOffset = playList.profileMusicOffset;
         playlistSearchQuery = playList.searchQuery;
         playlistSearchNextOffset = playList.searchNextOffset;
         playlistSearchNextFromMessageId = playList.searchNextFromMessageId;
@@ -1415,13 +1424,17 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
 
   public void requestMoreTracks () {
     synchronized (this) {
-      ensureStackAvailability((playListFlags & PLAYLIST_FLAG_REVERSE) != 0 ? FORCE_REASON_OLDER : FORCE_REASON_NEWER);
+      ensureStackAvailability(profileMusicUserId != 0 ? FORCE_REASON_NEWER :
+        (playListFlags & PLAYLIST_FLAG_REVERSE) != 0 ? FORCE_REASON_OLDER : FORCE_REASON_NEWER);
     }
   }
 
   public boolean canRequestMoreTrackReverse () {
     synchronized (this) {
-      if (message != null && playlistChatId != 0 && !messageList.isEmpty() && playState != STATE_NONE) {
+      if (message != null && (playlistChatId != 0 || profileMusicUserId != 0) && !messageList.isEmpty() && playState != STATE_NONE) {
+        if (profileMusicUserId != 0) {
+          return (messageListStateFlags & (LIST_STATE_LOADED_NEW | LIST_STATE_LOADING_NEWER)) == 0;
+        }
         if ((playListFlags & PLAYLIST_FLAG_REVERSE) != 0) {
           return (messageListStateFlags & (LIST_STATE_LOADED_OLD | LIST_STATE_LOADING_OLDER)) == 0;
         } else {
@@ -1433,7 +1446,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
   }
 
   private void ensureStackAvailability (int forceReason) {
-    if (message == null || (playlistChatId == 0 && playlistInlineQuery == null) || messageList.isEmpty() || playState == STATE_NONE) {
+    if (message == null || (playlistChatId == 0 && playlistInlineQuery == null && profileMusicUserId == 0) || messageList.isEmpty() || playState == STATE_NONE) {
       return;
     }
     int i = indexOfCurrentMessage();
@@ -1447,12 +1460,181 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
   private static final int FORCE_REASON_NEWER = 1;
   private static final int FORCE_REASON_OLDER = 2;
 
+  private long profileMusicUserId;
+  private int profileMusicOffset;
+
+  public synchronized long getProfileMusicUserId (Tdlib source) {
+    return source == tdlib && message != null && playState != STATE_NONE ? profileMusicUserId : 0;
+  }
+
+  public synchronized boolean isProfileMusicSource (Tdlib source, long userId, String query) {
+    return getProfileMusicUserId(source) == userId &&
+      StringUtils.equalsOrBothEmpty(query, playlistSearchQuery);
+  }
+
+  /** Reload the server's order without restarting a track that is still in the playlist. */
+  public synchronized void refreshProfileMusic (Tdlib source) {
+    refreshProfileMusic(source, source.myUserId());
+  }
+
+  public synchronized void refreshProfileMusic (Tdlib source, long userId) {
+    if (getProfileMusicUserId(source) != userId || userId == 0) return;
+    final int wanted = Math.max(100, messageList.size());
+    cancelStackLoader();
+    messageListStateFlags = LIST_STATE_LOADED_OLD | LIST_STATE_LOADING_NEWER;
+    final int contextId = messageListContextId;
+    if (!StringUtils.isEmpty(playlistSearchQuery)) {
+      source.profileMusic().search(userId, playlistSearchQuery,
+        () -> source == tdlib && contextId == messageListContextId,
+        (audios, error) -> {
+          if (error != null) finishProfileMusicRefreshError(contextId, error);
+          else {
+            ArrayList<TdApi.Message> tracks = new ArrayList<>(audios.audios.length);
+            for (TdApi.Audio audio : audios.audios) tracks.add(source.profileMusic().message(userId, audio));
+            applyProfileMusicRefresh(source, contextId, tracks, tracks.size(), true);
+          }
+        });
+    } else {
+      loadProfileMusicRefresh(source, userId, contextId, wanted, 0, new ArrayList<>());
+    }
+  }
+
+  private void loadProfileMusicRefresh (Tdlib source, long userId, int contextId,
+      int wanted, int offset, ArrayList<TdApi.Message> tracks) {
+    source.send(new TdApi.GetUserProfileAudios(userId, offset, 100), (audios, error) ->
+      source.uiExecute(() -> {
+        synchronized (TGPlayerController.this) {
+          if (source != tdlib || contextId != messageListContextId) return;
+          if (error != null) {
+            finishProfileMusicRefreshError(contextId, error);
+            return;
+          }
+          for (TdApi.Audio audio : audios.audios) {
+            TdApi.Message track = source.profileMusic().message(userId, audio);
+            boolean duplicate = false;
+            for (TdApi.Message previous : tracks) {
+              if (compareTracks(previous, track)) { duplicate = true; break; }
+            }
+            if (!duplicate) tracks.add(track);
+          }
+          int nextOffset = offset + audios.audios.length;
+          boolean end = audios.audios.length == 0 || nextOffset >= audios.totalCount;
+          boolean containsCurrent = false;
+          for (TdApi.Message track : tracks) {
+            if (compareTracks(track, message)) { containsCurrent = true; break; }
+          }
+          if (!end && (tracks.size() < wanted || !containsCurrent)) {
+            loadProfileMusicRefresh(source, userId, contextId, wanted, nextOffset, tracks);
+          } else {
+            applyProfileMusicRefresh(source, contextId, tracks, nextOffset, end);
+          }
+        }
+      }));
+  }
+
+  private synchronized void finishProfileMusicRefreshError (int contextId, TdApi.Error error) {
+    if (contextId != messageListContextId) return;
+    messageListStateFlags &= ~LIST_STATE_LOADING_NEWER;
+    notifyTrackListLoadStateChanged(trackListChangeListeners);
+    UI.showError(error);
+  }
+
+  private synchronized void applyProfileMusicRefresh (Tdlib source, int contextId,
+      ArrayList<TdApi.Message> tracks, int offset, boolean endReached) {
+    if (source != tdlib || contextId != messageListContextId || message == null) return;
+    if (tracks.isEmpty()) {
+      stopPlaybackImpl(false);
+      return;
+    }
+    int current = -1;
+    for (int i = 0; i < tracks.size(); i++) {
+      if (compareTracks(tracks.get(i), message)) { current = i; break; }
+    }
+    if (current == -1) {
+      int origin = Math.max(0, Math.min(indexOfCurrentMessage(), tracks.size() - 1));
+      long userId = profileMusicUserId;
+      String query = playlistSearchQuery;
+      int flags = playListFlags & PLAYLIST_FLAGS_MASK;
+      boolean wasPaused = playState == STATE_PAUSED;
+      playPauseMessageImpl(tracks.get(origin), false, false, source, new PlayListBuilder() {
+        @Override
+        public PlayList buildPlayList (TdApi.Message fromMessage) {
+          return new PlayList(tracks, origin).setProfileMusicSource(userId, offset, endReached)
+            .setSearchQuery(query).setPlayListFlags(flags);
+        }
+        @Override
+        public boolean wouldReusePlayList (TdApi.Message track, boolean reverse,
+            boolean altered, List<TdApi.Message> previous, long chatId) {
+          return false;
+        }
+      });
+      if (wasPaused) playPauseCurrent(false);
+      return;
+    }
+    message = tracks.get(current);
+    clearMessagesImpl();
+    addMessagesImpl(tracks);
+    profileMusicOffset = offset;
+    messageListStateFlags = LIST_STATE_LOADED_OLD | (endReached ? LIST_STATE_LOADED_NEW : 0);
+    notifyTrackListReset(trackListChangeListeners, source, message, current, messageList,
+      playlistChatId, getPlaybackSessionFlags(), playState);
+  }
+
+  private void prepareProfileMusic (boolean allowNewer, int forceReason) {
+    if ((!allowNewer && forceReason == FORCE_REASON_NONE) ||
+        (messageListStateFlags & (LIST_STATE_LOADED_NEW | LIST_STATE_LOADING_NEWER)) != 0) {
+      return;
+    }
+    final int contextId = messageListContextId;
+    final Tdlib source = tdlib;
+    final long userId = profileMusicUserId;
+    final int offset = profileMusicOffset;
+    messageListStateFlags |= LIST_STATE_LOADING_NEWER;
+    source.send(new TdApi.GetUserProfileAudios(userId, offset, 100), (audios, error) ->
+      source.uiExecute(() -> {
+        synchronized (TGPlayerController.this) {
+          if (contextId != messageListContextId || source != tdlib ||
+              userId != profileMusicUserId) return;
+          if (error != null) {
+            messageListStateFlags &= ~LIST_STATE_LOADING_NEWER;
+            notifyTrackListLoadStateChanged(trackListChangeListeners);
+            UI.showError(error);
+            return;
+          }
+          profileMusicOffset = offset + audios.audios.length;
+          ArrayList<TdApi.Message> tracks = new ArrayList<>(audios.audios.length);
+          for (TdApi.Audio audio : audios.audios) {
+            TdApi.Message track = source.profileMusic().message(userId, audio);
+            boolean duplicate = indexOfMessage(track) != -1;
+            for (TdApi.Message previous : tracks) {
+              if (compareTracks(previous, track)) { duplicate = true; break; }
+            }
+            if (!duplicate) tracks.add(track);
+          }
+          if (profileMusicOffset >= audios.totalCount || audios.audios.length == 0) {
+            messageListStateFlags |= LIST_STATE_LOADED_NEW;
+          }
+          if (tracks.isEmpty() && (messageListStateFlags & LIST_STATE_LOADED_NEW) == 0) {
+            messageListStateFlags &= ~LIST_STATE_LOADING_NEWER;
+            prepareProfileMusic(true, FORCE_REASON_NEWER);
+            return;
+          }
+          addMessages(contextId, tracks, true);
+        }
+      }));
+  }
+
   private TdApi.GetInlineQueryResults makeNextInlineQuery () {
     return new TdApi.GetInlineQueryResults(playlistInlineQuery.botUserId, playlistInlineQuery.chatId, playlistInlineQuery.userLocation, playlistInlineQuery.query, playlistInlineNextOffset);
   }
 
   private void prepareStack (boolean allowNewer, boolean allowOlder, int forceReason) {
     if (messageList.isEmpty()) {
+      return;
+    }
+
+    if (profileMusicUserId != 0) {
+      prepareProfileMusic(allowNewer, forceReason);
       return;
     }
 
@@ -1552,6 +1734,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
       if (message == null || playState == STATE_NONE) {
         return true;
       }
+      if (profileMusicUserId != 0) return (messageListStateFlags & LIST_STATE_LOADED_NEW) != 0;
       if ((playListFlags & PLAYLIST_FLAG_REVERSE) != 0) {
         return ((messageListStateFlags) & LIST_STATE_LOADED_OLD) != 0;
       } else {
@@ -1807,6 +1990,8 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
     private final int originIndex;
 
     private int playListFlags;
+    private long profileMusicUserId;
+    private int profileMusicOffset;
     private String searchQuery, searchNextOffset;
     private long searchNextFromMessageId;
     private @Nullable TdApi.MessageTopic topicId;
@@ -1844,9 +2029,14 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
       this.originIndex = newOriginIndex;
     }
 
-    /**
-     * Flags to be applied to playback flags (in addition to internal ones)
-     * */
+    /** Use the profile's native order and offset instead of chat message pagination. */
+    public PlayList setProfileMusicSource (long userId, int offset, boolean endReached) {
+      this.profileMusicUserId = userId;
+      this.profileMusicOffset = offset;
+      return setReachedEnds(endReached, true);
+    }
+
+    /** Flags to be applied to playback flags (in addition to internal ones). */
     public PlayList setPlayListFlags (int flags) {
       this.playListFlags = flags;
       return this;

@@ -54,6 +54,7 @@ import org.thunderdog.challegram.loader.ImageFile;
 import org.thunderdog.challegram.loader.ImageGalleryFile;
 import org.thunderdog.challegram.navigation.HeaderView;
 import org.thunderdog.challegram.navigation.Menu;
+import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.player.TGPlayerController;
 import org.thunderdog.challegram.telegram.RightId;
 import org.thunderdog.challegram.telegram.SessionSnapshot;
@@ -64,6 +65,7 @@ import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.Strings;
 import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.ui.ListItem;
+import org.thunderdog.challegram.ui.ProfileMusicPickerController;
 import org.thunderdog.challegram.ui.SettingsAdapter;
 import org.thunderdog.challegram.util.HapticMenuHelper;
 import org.thunderdog.challegram.util.Permissions;
@@ -274,6 +276,9 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
 
     InlineResultCommon musicItem = createItem(context, tdlib, KEY_MUSIC, R.drawable.baseline_music_note_24, Lang.getString(R.string.Music), Lang.getString(R.string.SendMusicHint));
     items.add(createItem(musicItem, R.id.btn_musicFiles));
+    items.add(createItem(createItem(context, tdlib, "profile-music",
+      R.drawable.baseline_queue_music_24, Lang.getString(R.string.ProfileMusicPlaylist),
+      Lang.getString(R.string.SendMusicHint)), R.id.btn_profileMusic));
 
     boolean addedDownloads = false;
     boolean downloadsEmpty = false;
@@ -444,8 +449,10 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
     private final long duration;
     private final String mime;
     private final long albumId;
+    public final TdApi.Audio profileAudio;
 
     public MusicEntry (long _id, String artist, String title, String path, long duration, String mime, long albumId) {
+      this.profileAudio = null;
       this._id = _id;
       this.artist = artist;
       this.title = title;
@@ -453,6 +460,17 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
       this.duration = duration;
       this.mime = mime;
       this.albumId = albumId;
+    }
+
+    public MusicEntry (TdApi.Audio audio) {
+      profileAudio = audio;
+      _id = audio.audio.id;
+      artist = audio.performer;
+      title = audio.title;
+      path = audio.audio.local.path;
+      duration = audio.duration * 1000L;
+      mime = audio.mimeType;
+      albumId = 0;
     }
 
     public String getMimeType () {
@@ -1085,6 +1103,16 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
     if (item.getViewType() == ListItem.TYPE_CUSTOM_INLINE) {
       InlineResultCommon result = (InlineResultCommon) item.getData();
       final int itemId = item.getId();
+      if (itemId == R.id.btn_profileMusic) {
+        if (mediaLayout.getFilesControllerDelegate().showRestriction(v, RightId.SEND_AUDIO)) return;
+        mediaLayout.hide(false);
+        ViewController<?> parent = UI.getCurrentStackItem(context());
+        if (parent != null) ProfileMusicPickerController.openProfile(parent, songs -> {
+          if (!parent.isDestroyed()) mediaLayout.pickDateOrProceed((options, disableMarkdown) ->
+            mediaLayout.sendFilesMixed(v, Collections.emptyList(), songs, options, false));
+        });
+        return;
+      }
       if (itemId == R.id.btn_file || itemId == R.id.btn_music) {
         if (inFileSelectMode) {
           selectItem(item, result);

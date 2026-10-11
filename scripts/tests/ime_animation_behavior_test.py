@@ -171,8 +171,9 @@ public class ImeAnimationTest {
     __TRANSITIONS__
   }
   static class Composer {
-    boolean emojiShown;
+    boolean emojiShown, commandsShown;
     KeyboardFrameLayout emojiKeyboardFrameLayout;
+    KeyboardFrameLayout keyboardLayout;
     final TouchHelper inputViewDisabledClickHelper = new TouchHelper();
     final InputView input = new InputView() {
       __TOUCH__
@@ -259,6 +260,24 @@ public class ImeAnimationTest {
       callback.onEnd(nextAnimation);
       root.frame();
     }
+
+    // Bot panels need the same preparation before Android handles a composer
+    // tap. Otherwise their removal exposes the IME's intermediate heights.
+    composer.emojiShown = false;
+    composer.commandsShown = true;
+    composer.keyboardLayout = new KeyboardFrameLayout();
+    root.applied.clear();
+    composer.input.onTouchEvent(new MotionEvent(MotionEvent.ACTION_UP));
+    root.apply(callback, 320);
+    composer.commandsShown = false;
+    composer.keyboardLayout.onKeyboardStateChanged(true);
+    for (int height : new int[] {0, 80, 160, 240, 320}) {
+      progress(callback, composer.input.opening, height);
+    }
+    check(root.applied.equals(List.of(320)), "Tapping a bot panel must replace it at the destination height");
+    check(composer.keyboardLayout.onPreDraw(), "The bot-panel swap must release the window immediately");
+    callback.onEnd(composer.input.opening);
+    root.frame();
 
     for (int destination : new int[] {0, 320}) {
       root.applied.clear();

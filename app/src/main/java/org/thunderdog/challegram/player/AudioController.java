@@ -50,6 +50,7 @@ import org.thunderdog.challegram.data.TGAudio;
 import org.thunderdog.challegram.service.AudioService;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibManager;
+import org.thunderdog.challegram.telegram.TdlibProfileMusic;
 import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.unsorted.Settings;
 
@@ -100,6 +101,7 @@ public class AudioController extends BasePlaybackController implements TGAudio.P
   private ExoPlayer exoPlayer;
   // private ConcatenatingMediaSource mediaList;
   private ArrayList<TdApi.Message> playList;
+  private Tdlib playListTdlib;
   private boolean isPlaying;
   private int playIndex = -1;
 
@@ -330,6 +332,16 @@ public class AudioController extends BasePlaybackController implements TGAudio.P
       return;
     }
 
+    boolean preservePlayback = exoPlayer != null && playListTdlib == tdlib &&
+      TdlibProfileMusic.userId(currentTrack) != 0 && comparePlayingObject(tdlib, currentTrack) &&
+      playList != null && playIndex >= 0 && playIndex < playList.size() &&
+      TGPlayerController.compareTracks(playList.get(playIndex), currentTrack);
+    boolean sameQueue = preservePlayback && this.playFlags == playFlags &&
+      this.playList != null && this.playList.size() == trackList.size();
+    for (int i = 0; sameQueue && i < trackList.size(); i++) {
+      sameQueue = TGPlayerController.compareTracks(this.playList.get(i), trackList.get(i));
+    }
+    long position = preservePlayback ? Math.max(0, exoPlayer.getCurrentPosition()) : C.TIME_UNSET;
     this.playFlags = playFlags;
     boolean reverseMode = inReverseMode();
 
@@ -342,8 +354,11 @@ public class AudioController extends BasePlaybackController implements TGAudio.P
     }
     this.playList.ensureCapacity(trackList.size());
     this.playList.addAll(trackList);
+    this.playListTdlib = tdlib;
     this.playIndex = trackIndex;
     final int count = trackList.size();
+    // A profile refresh on opening the player often only updates TDLib file metadata.
+    if (sameQueue) return;
 
     ArrayList<MediaSource> mediaSources = new ArrayList<>(count);
     if (reverseMode) {
@@ -359,14 +374,17 @@ public class AudioController extends BasePlaybackController implements TGAudio.P
       }
     }
 
-    if (exoPlayer != null) {
+    if (exoPlayer != null && !preservePlayback) {
       exoPlayer.removeListener(this);
       exoPlayer.release();
       exoPlayer = null;
     }
 
-    ExoPlayer exoPlayer = this.exoPlayer = U.newExoPlayer(UI.getAppContext(), true);
-    exoPlayer.addListener(this);
+    ExoPlayer exoPlayer = this.exoPlayer;
+    if (exoPlayer == null) {
+      exoPlayer = this.exoPlayer = U.newExoPlayer(UI.getAppContext(), true);
+      exoPlayer.addListener(this);
+    }
     setExoPlayerParameters();
     setExoPlayerSpeed();
     exoPlayer.setVolume(volume);
@@ -377,14 +395,15 @@ public class AudioController extends BasePlaybackController implements TGAudio.P
       case TGPlayerController.PLAY_FLAG_REPEAT_ONE:
         exoPlayer.setRepeatMode(Player.REPEAT_MODE_ONE);
         break;
+      default:
+        exoPlayer.setRepeatMode(Player.REPEAT_MODE_OFF);
+        break;
     }
-    if ((playFlags & TGPlayerController.PLAY_FLAG_SHUFFLE) != 0) {
-      exoPlayer.setShuffleModeEnabled(true);
-    }
+    exoPlayer.setShuffleModeEnabled((playFlags & TGPlayerController.PLAY_FLAG_SHUFFLE) != 0);
 
-    exoPlayer.setMediaSources(mediaSources);
+    int windowIndex = reverseMode ? count - trackIndex - 1 : trackIndex;
+    exoPlayer.setMediaSources(mediaSources, windowIndex, position);
     exoPlayer.prepare();
-    seekTo(exoPlayer, trackIndex, mediaSources.size(), reverseMode);
     exoPlayer.setPlayWhenReady(isPlaying);
   }
 

@@ -116,6 +116,7 @@ public abstract class SharedBaseController <T extends MessageSourceProvider> ext
       case TdApi.SearchMessagesFilterAudio.CONSTRUCTOR:
       case TdApi.SearchMessagesFilterDocument.CONSTRUCTOR:
       case TdApi.SearchMessagesFilterVoiceNote.CONSTRUCTOR:
+      case TdApi.SearchMessagesFilterPoll.CONSTRUCTOR:
         return new SharedCommonController(context, tdlib).setFilter(filter);
     }
     throw new IllegalArgumentException("unsupported filter: " + filter);
@@ -859,6 +860,9 @@ public abstract class SharedBaseController <T extends MessageSourceProvider> ext
         case TdApi.SearchMessagesFilterAudio.CONSTRUCTOR: {
           return EmptySmartView.MODE_EMPTY_MUSIC;
         }
+        case TdApi.SearchMessagesFilterPoll.CONSTRUCTOR: {
+          return EmptySmartView.MODE_EMPTY_POLLS;
+        }
         case TdApi.SearchMessagesFilterUrl.CONSTRUCTOR: {
           return EmptySmartView.MODE_EMPTY_LINKS;
         }
@@ -1200,7 +1204,8 @@ public abstract class SharedBaseController <T extends MessageSourceProvider> ext
   }
 
   public void addMessage (TdApi.Message message) {
-    if (!ProfileController.filterMediaMessage(message) || chatId != message.chatId || !supportsMessageContent()) {
+    if (!ProfileController.filterMediaMessage(message) || chatId != message.chatId ||
+        !Td.matchesTopic(message.topicId, topicId) || !supportsMessageContent()) {
       return;
     }
 
@@ -1396,6 +1401,36 @@ public abstract class SharedBaseController <T extends MessageSourceProvider> ext
     int index = indexOfMessage(messageId);
     if (index != -1) {
       data.get(index).getMessage().content = content;
+    }
+    TdApi.SearchMessagesFilter filter = provideSearchFilter();
+    if (filter != null && filter.getConstructor() == TdApi.SearchMessagesFilterPoll.CONSTRUCTOR) {
+      refreshPollRow(data, messageId, content);
+      refreshPollRow(searchData, messageId, content);
+    }
+  }
+
+  private void refreshPollRow (ArrayList<T> rows, long messageId, TdApi.MessageContent content) {
+    if (rows == null) {
+      return;
+    }
+    for (int i = 0; i < rows.size(); i++) {
+      T oldRow = rows.get(i);
+      if (oldRow.getSourceMessageId() == messageId) {
+        TdApi.Message message = oldRow.getMessage();
+        message.content = content;
+        T row = parseObject(message);
+        if (row != null) {
+          rows.set(i, row);
+          for (int j = 0; j < adapter.getItems().size(); j++) {
+            ListItem item = adapter.getItems().get(j);
+            if (item.getData() == oldRow) {
+              item.setData(row);
+              adapter.notifyItemChanged(j);
+            }
+          }
+        }
+        break;
+      }
     }
   }
 

@@ -69,6 +69,7 @@ import org.thunderdog.challegram.util.text.TextEntity;
 import org.thunderdog.challegram.widget.BaseView;
 import org.thunderdog.challegram.widget.EmojiStatusInfoView;
 import org.thunderdog.challegram.widget.PopupLayout;
+import org.thunderdog.challegram.widget.ProfileMusicView;
 
 import java.util.ArrayList;
 
@@ -136,6 +137,27 @@ public class ComplexHeaderView extends BaseView implements RtlCheckListener, Sti
     setCustomControllerProvider(this);
     TGLegacyManager.instance().addEmojiListener(this);
     setOnEmojiStatusClickListener(null);
+  }
+
+  private @Nullable ProfileMusicView profileMusic;
+  private int profileMusicAccessibilityAction = -1;
+
+  public void setProfileAudio (long userId, @Nullable TdApi.Audio audio) {
+    if (parent == null) return;
+    if (profileMusic == null) profileMusic = new ProfileMusicView(parent);
+    profileMusic.setAudio(userId, audio);
+    if (profileMusicAccessibilityAction != -1) {
+      androidx.core.view.ViewCompat.removeAccessibilityAction(this, profileMusicAccessibilityAction);
+      profileMusicAccessibilityAction = -1;
+    }
+    if (audio != null) {
+      profileMusicAccessibilityAction = androidx.core.view.ViewCompat.addAccessibilityAction(this,
+        profileMusic.getContentDescription(), (view, arguments) -> {
+          profileMusic.openPlaylist();
+          return true;
+        });
+    }
+    invalidate();
   }
 
   public void setIgnoreDrawEmojiStatus (boolean ignoreDrawEmojiStatus) {
@@ -907,6 +929,13 @@ public class ComplexHeaderView extends BaseView implements RtlCheckListener, Sti
         baseSubtitleTop += ((calculateHeaderHeight() - Screen.dp(28f)) - baseSubtitleTop) * avatarExpandFactor;
       }
 
+      float musicVisibility = profileMusic != null && profileMusic.hasAudio() ?
+        MathUtils.clamp((calculateHeaderHeight() - currentHeaderOffset - Screen.dp(118f)) /
+          (float) Screen.dp(26f)) : 0f;
+      // Leave room for the pill beneath the name and status when the photo fills the header.
+      baseTitleTop -= Screen.dp(32f) * musicVisibility * avatarExpandFactor;
+      baseSubtitleTop -= Screen.dp(32f) * musicVisibility * avatarExpandFactor;
+
       if (trimmedTitle != null) {
         c.save();
         c.translate(baseTextLeft, baseTitleTop);
@@ -1006,6 +1035,14 @@ public class ComplexHeaderView extends BaseView implements RtlCheckListener, Sti
 
       if (showArrow) {
         Drawables.draw(c, arrowDrawable, baseTextLeft + Math.max(trimmedTitle != null ? trimmedTitle.getWidth() : 0, trimmedSubtitle != null ? trimmedSubtitle.getWidth() : 0) + Screen.dp(4f), Size.getHeaderPortraitSize() / 2 - arrowDrawable.getMinimumHeight() / 2, Paints.getPorterDuffPaint(ColorUtils.alphaColor(.25f, titleColor)));
+      }
+
+      if (profileMusic != null) {
+        float musicY = MathUtils.fromTo(baseSubtitleTop + Screen.dp(32f),
+          calculateHeaderHeight() - Screen.dp(18f), avatarExpandFactor);
+        int musicBackground = ColorUtils.fromToArgb(ColorUtils.alphaColor(.14f, titleColor),
+          ColorUtils.alphaColor(.4f, Color.BLACK), avatarExpandFactor);
+        profileMusic.draw(c, viewWidth, musicY, musicVisibility, titleColor, musicBackground);
       }
 
       if (statusVisibility > 0f) {
@@ -1167,7 +1204,8 @@ public class ComplexHeaderView extends BaseView implements RtlCheckListener, Sti
 
   @Override
   public boolean needClickAt (View view, float x, float y) {
-    return (super.needClickAt(view, x, y) && y < calculateHeaderHeight())
+    return (profileMusic != null && profileMusic.contains(x, y))
+      || (super.needClickAt(view, x, y) && y < calculateHeaderHeight())
       || !isCollapsed() && (
         BitwiseUtils.hasFlag(flags, FLAG_ALLOW_TITLE_CLICK) && trimmedTitleClickRect.contains(x, y)
         || emojiStatusClickRect.contains(x, y)
@@ -1177,6 +1215,10 @@ public class ComplexHeaderView extends BaseView implements RtlCheckListener, Sti
 
   @Override
   public void onClickAt (View view, float x, float y) {
+    if (profileMusic != null && profileMusic.contains(x, y)) {
+      profileMusic.openPlaylist();
+      return;
+    }
     if (!isCollapsed()) {
       if (emojiStatusClickRect.contains(x, y)) {
         emojiStatusHelper.performClick(view);

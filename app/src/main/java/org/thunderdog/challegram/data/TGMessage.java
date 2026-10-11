@@ -3096,14 +3096,15 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
                 if (replyToMessage.chatId == 0 || replyToMessage.messageId == 0) {
                   buildContentHint(view, getReplyLocationProvider(), false).show(tdlib, Lang.getString(R.string.MessageReplyPrivate));
                 } else {
-                  tdlib.ui().openMessage(controller(), replyToMessage.chatId, new MessageId(replyToMessage), openParameters().highlightQuote(replyToMessage.quote));
+                  tdlib.ui().openMessage(controller(), replyToMessage.chatId, new MessageId(replyToMessage), openParameters().highlightQuote(replyToMessage.quote).highlightPollOption(replyToMessage.pollOptionId));
                 }
               } else if (isScheduled()) {
-                tdlib.ui().openMessage(controller(), replyToMessage.chatId, new MessageId(replyToMessage), openParameters().highlightQuote(replyToMessage.quote));
+                tdlib.ui().openMessage(controller(), replyToMessage.chatId, new MessageId(replyToMessage), openParameters().highlightQuote(replyToMessage.quote).highlightPollOption(replyToMessage.pollOptionId));
               } else {
                 manager.controller().highlightMessage(new MessageId(replyToMessage), toMessageId(),
                   Td.isEmpty(replyToMessage.quote) ? null :
-                    new TdApi.InputTextQuote(replyToMessage.quote.text, replyToMessage.quote.position));
+                    new TdApi.InputTextQuote(replyToMessage.quote.text, replyToMessage.quote.position),
+                  replyToMessage.pollOptionId);
               }
             }
           }

@@ -1,5 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+  <item type="id" name="controller_pollStatistics" />
+  <item type="id" name="btn_pollMedia" />
+  <item type="id" name="btn_pollDurationCustom" />
+  <item type="id" name="btn_pollVote" />
+  <item type="id" name="btn_pollStatistics" />
+  <item type="id" name="btn_pollReorder" />
+  <item type="id" name="btn_pollMediaLabel" />
   <item type="id" name="controller_chatBoost" />
   <item type="id" name="btn_chatBoost" />
   <item type="id" name="btn_chatBoostLevels" />
@@ -1548,4 +1555,11 @@
   <item type="id" name="controller_contact_photo_sticker" />
   <item type="id" name="btn_contactPhotoEmoji" />
   <item type="id" name="btn_contactPhotoFrame" />
+  <item type="id" name="btn_profileAudio" />
+  <item type="id" name="btn_profileMusic" />
+  <item type="id" name="btn_addProfileMusic" />
+  <item type="id" name="btn_profileMusicPrivacy" />
+  <item type="id" name="btn_saveToSavedMessages" />
+  <item type="id" name="controller_profile_music_picker" />
+  <item type="id" name="btn_profileMusicUndo" />
 </resources>

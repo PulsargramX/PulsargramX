@@ -22,9 +22,11 @@ import androidx.recyclerview.widget.RecyclerView;
 import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.component.attach.CustomItemAnimator;
+import org.thunderdog.challegram.component.user.UserView;
 import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.data.TD;
-import org.thunderdog.challegram.data.TGFoundChat;
+import org.thunderdog.challegram.data.PollResultPolicy;
+import org.thunderdog.challegram.data.TGUser;
 import org.thunderdog.challegram.navigation.DoubleHeaderView;
 import org.thunderdog.challegram.navigation.NavigationController;
 import org.thunderdog.challegram.navigation.ViewController;
@@ -39,14 +41,12 @@ import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.Views;
 import org.thunderdog.challegram.v.CustomRecyclerView;
-import org.thunderdog.challegram.widget.CenterDecoration;
 import org.thunderdog.challegram.widget.CustomTextView;
 import org.thunderdog.challegram.widget.ListInfoView;
-import org.thunderdog.challegram.widget.VerticalChatView;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import me.vkryl.android.AnimatorUtils;
 import me.vkryl.core.ArrayUtils;
@@ -56,6 +56,12 @@ public class PollResultsController extends RecyclerViewController<PollResultsCon
   public static class Args {
     public TdApi.Poll poll;
     public final long chatId, messageId;
+    public String optionId;
+
+    public Args (TdApi.Poll poll, long chatId, long messageId, String optionId) {
+      this(poll, chatId, messageId);
+      this.optionId = optionId;
+    }
 
     public Args(TdApi.Poll poll, long chatId, long messageId) {
       this.poll = poll;
@@ -107,8 +113,6 @@ public class PollResultsController extends RecyclerViewController<PollResultsCon
     }
   }
 
-  private static final boolean NEED_CENTER_DECORATION = false;
-
   private static class ListCache implements PollVoterListManager.ChangeListener {
     private final Tdlib tdlib;
     private final PollVoterListManager voters;
@@ -118,9 +122,21 @@ public class PollResultsController extends RecyclerViewController<PollResultsCon
       this.tdlib = context.tdlib();
       this.adapter = new SettingsAdapter(context) {
         @Override
-        protected void setChatData (ListItem item, VerticalChatView chatView) {
-          // chatView.setPreviewActionListProvider(CallListController.this);
-          chatView.setChat((TGFoundChat) item.getData());
+        protected void setUser (ListItem item, int position, UserView view, boolean isUpdate) {
+          TdApi.PollVoter voter = (TdApi.PollVoter) item.getData();
+          TGUser user;
+          if (voter.voterId instanceof TdApi.MessageSenderUser) {
+            long userId = ((TdApi.MessageSenderUser) voter.voterId).userId;
+            user = new TGUser(tdlib, tdlib.cache().user(userId));
+          } else {
+            long chatId = ((TdApi.MessageSenderChat) voter.voterId).chatId;
+            user = new TGUser(tdlib, tdlib.chat(chatId));
+          }
+          user.setCustomStatus(voter.date != 0 ? Lang.getTimestamp(voter.date, TimeUnit.SECONDS) : "");
+          view.setLayoutParams(new RecyclerView.LayoutParams(
+            Math.min(Screen.dp(260f), Screen.currentWidth()), Screen.dp(95f)));
+          view.setHeight(Screen.dp(95f));
+          view.setUser(user);
         }
       };
       this.adapter.setNoEmptyProgress();
@@ -134,11 +150,8 @@ public class PollResultsController extends RecyclerViewController<PollResultsCon
     }
 
     private ListItem newItem (TdApi.PollVoter voter) {
-      TGFoundChat foundChat = new TGFoundChat(tdlib, voter.voterId, false)
-        .setNoUnread()
-        .setNoAnonymousBadge();
-      return new ListItem(ListItem.TYPE_CHAT_VERTICAL, R.id.sender)
-        .setData(foundChat)
+      return new ListItem(ListItem.TYPE_USER, R.id.sender)
+        .setData(voter)
         .setLongId(Td.getSenderId(voter.voterId));
     }
 
@@ -150,17 +163,23 @@ public class PollResultsController extends RecyclerViewController<PollResultsCon
       }
       adapter.getItems().addAll(startIndex, itemsToAdd);
       adapter.notifyItemRangeInserted(startIndex, itemsToAdd.size());
-      if (NEED_CENTER_DECORATION) {
-        adapter.invalidateItemDecorations();
-      }
+    }
+
+    @Override
+    public void onItemChanged (ListManager<TdApi.PollVoter> list, TdApi.PollVoter item,
+                               int index, int cause) {
+      adapter.getItems().set(index, newItem(item));
+      adapter.notifyItemChanged(index);
+    }
+
+    @Override
+    public void onItemRemoved (ListManager<TdApi.PollVoter> list, TdApi.PollVoter item, int index) {
+      adapter.removeItem(index);
     }
 
     @Override
     public void onItemAdded (ListManager<TdApi.PollVoter> list, TdApi.PollVoter item, int toIndex) {
       adapter.addItem(toIndex, newItem(item));
-      if (NEED_CENTER_DECORATION) {
-        adapter.invalidateItemDecorations();
-      }
     }
   }
 
@@ -197,24 +216,17 @@ public class PollResultsController extends RecyclerViewController<PollResultsCon
     updateHeader(false);
 
     // FillingDecoration decoration = new FillingDecoration(recyclerView, this);
-    List<ListItem> items = new ArrayList<>();
-
-    items.add(new ListItem(ListItem.TYPE_TEXT_VIEW, R.id.text_title, 0, TD.toCharSequence(getPoll().question), false));
-    items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));
-
-    int optionId = 0;
-    for (TdApi.PollOption option : getPoll().options) {
-      if (option.voterCount == 0) {
-        optionId++;
-        continue;
-      }
-      items.add(new ListItem(ListItem.TYPE_TEXT_VIEW, R.id.text_subtitle, 0, TD.toCharSequence(option.text), false).setIntValue(optionId));
-      items.add(new ListItem(ListItem.TYPE_SHADOW_TOP));
-      items.add(newRecyclerItem(optionId));
-      items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));
-      items.add(new ListItem(ListItem.TYPE_LIST_INFO_VIEW).setIntValue(optionId));
-      optionId++;
+    if (!PollResultPolicy.canGetVoters(getPoll().isAnonymous, getPoll().canSeeResults,
+        getPoll().canGetVoters)) {
+      adapter = new SettingsAdapter(this);
+      adapter.setItems(new ListItem[] {
+        new ListItem(ListItem.TYPE_TEXT_VIEW, R.id.text_title, 0,
+          Lang.getString(R.string.PollVoteRestricted), false)
+      }, false);
+      recyclerView.setAdapter(adapter);
+      return;
     }
+    List<ListItem> items = buildItems();
 
     adapter = new SettingsAdapter(this) {
       @Override
@@ -247,19 +259,6 @@ public class PollResultsController extends RecyclerViewController<PollResultsCon
         ListCache listCache = (ListCache) item.getData();
         if (isInitialization) {
           recyclerView.setItemAnimator(new CustomItemAnimator(AnimatorUtils.DECELERATE_INTERPOLATOR, 180l));
-          if (NEED_CENTER_DECORATION) {
-            recyclerView.addItemDecoration(new CenterDecoration() {
-              @Override
-              public int getItemCount() {
-                return ((ListCache) ((ListItem) recyclerView.getTag()).getData()).voters.getCount();
-              }
-            });
-            ((CustomRecyclerView) recyclerView).setMeasureListener((v, oldWidth, oldHeight, newWidth, newHeight) -> {
-              if (oldWidth != newWidth && oldWidth != 0) {
-                v.invalidateItemDecorations();
-              }
-            });
-          }
           recyclerView.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override
             public void onScrolled(@NonNull RecyclerView recyclerView, int dx, int dy) {
@@ -278,9 +277,49 @@ public class PollResultsController extends RecyclerViewController<PollResultsCon
     };
     adapter.setItems(items, false);
     recyclerView.setAdapter(adapter);
+    if (getArgumentsStrict().optionId != null) {
+      for (int i = 0; i < getPoll().options.length; i++) {
+        if (getArgumentsStrict().optionId.equals(getPoll().options[i].id)) {
+          ((LinearLayoutManager) recyclerView.getLayoutManager())
+            .scrollToPositionWithOffset(findOption(i), 0);
+          break;
+        }
+      }
+    }
     // recyclerView.addItemDecoration(decoration);
 
     tdlib.listeners().addPollListener(getPoll().id, this);
+  }
+
+  private List<ListItem> buildItems () {
+    List<ListItem> items = new ArrayList<>();
+
+    items.add(new ListItem(ListItem.TYPE_TEXT_VIEW, R.id.text_title, 0, TD.toCharSequence(getPoll().question), false));
+    items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));
+
+    int optionId = 0;
+    for (TdApi.PollOption option : getPoll().options) {
+      items.add(new ListItem(ListItem.TYPE_TEXT_VIEW, R.id.text_subtitle, 0,
+        TD.toCharSequence(option.text), false).setIntValue(optionId));
+      items.add(new ListItem(ListItem.TYPE_SHADOW_TOP));
+      if (option.voterCount > 0) {
+        items.add(newRecyclerItem(optionId));
+      }
+      items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));
+      items.add(new ListItem(ListItem.TYPE_LIST_INFO_VIEW).setIntValue(optionId));
+      optionId++;
+    }
+    return items;
+  }
+
+  private void destroyVoterLists () {
+    if (adapter != null) {
+      for (ListItem item : adapter.getItems()) {
+        if (item.getData() instanceof ListCache) {
+          ((ListCache) item.getData()).voters.performDestroy();
+        }
+      }
+    }
   }
 
   private int findOption (int optionId) {
@@ -299,61 +338,49 @@ public class PollResultsController extends RecyclerViewController<PollResultsCon
     return new ListItem(ListItem.TYPE_RECYCLER_HORIZONTAL).setIntValue(optionId).setData(new ListCache(this, getArgumentsStrict().chatId, getArgumentsStrict().messageId, optionId));
   }
 
-  private int findInsertionIndex (int optionId) {
-    List<ListItem> items = adapter.getItems();
-    int index = 0;
-    for (ListItem item : items) {
-      if (item.getId() == R.id.text_subtitle && item.getIntValue() >= optionId) {
-        return index;
-      }
-      index++;
-    }
-    return items.size();
-  }
-
   @Override
   public void destroy() {
     super.destroy();
     tdlib.listeners().removePollListener(getPoll().id, this);
+    destroyVoterLists();
   }
-
-  private static final int ITEM_COUNT_PER_OPTION = 5;
 
   @Override
   public void onUpdatePoll (TdApi.Poll updatedPoll) {
     runOnUiThread(() -> {
       if (!isDestroyed() && getPoll().id == updatedPoll.id) {
+        boolean changedOptions = getPoll().options.length != updatedPoll.options.length;
+        if (!changedOptions) {
+          for (int i = 0; i < updatedPoll.options.length; i++) {
+            if (!getPoll().options[i].id.equals(updatedPoll.options[i].id) ||
+                getPoll().options[i].voterCount != updatedPoll.options[i].voterCount) {
+              changedOptions = true;
+              break;
+            }
+          }
+        }
         getArgumentsStrict().poll = updatedPoll;
 
-        if (updatedPoll.totalVoterCount == 0 || !TD.hasAnswer(updatedPoll)) {
+        if (!PollResultPolicy.canGetVoters(updatedPoll.isAnonymous, updatedPoll.canSeeResults,
+            updatedPoll.canGetVoters)) {
           navigateBack();
           return;
         }
 
         updateHeader(true);
 
+        if (changedOptions) {
+          destroyVoterLists();
+          adapter.setItems(buildItems(), false);
+          return;
+        }
         List<ListItem> items = adapter.getItems();
-        int optionId = 0;
-        for (TdApi.PollOption option : updatedPoll.options) {
-          int optionIndex = findOption(optionId);
-          if (option.voterCount == 0) {
-            if (optionIndex != -1) {
-              adapter.removeRange(optionIndex, ITEM_COUNT_PER_OPTION);
-            }
-          } else {
-            if (optionIndex == -1) {
-              int atIndex = findInsertionIndex(optionId);
-              items.addAll(atIndex, Arrays.asList(
-                new ListItem(ListItem.TYPE_HEADER, R.id.text_subtitle, 0, TD.toCharSequence(option.text), false).setIntValue(optionId),
-                new ListItem(ListItem.TYPE_SHADOW_TOP),
-                newRecyclerItem(optionId),
-                new ListItem(ListItem.TYPE_SHADOW_BOTTOM),
-                new ListItem(ListItem.TYPE_LIST_INFO_VIEW).setIntValue(optionId)
-              ));
-              adapter.notifyItemRangeChanged(atIndex, ITEM_COUNT_PER_OPTION);
-            }
+        for (int i = 0; i < updatedPoll.options.length; i++) {
+          int position = findOption(i);
+          if (position >= 0) {
+            items.get(position).setString(TD.toCharSequence(updatedPoll.options[i].text));
+            adapter.notifyItemChanged(position);
           }
-          optionId++;
         }
 
         int index = 0;

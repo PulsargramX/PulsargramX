@@ -50,6 +50,7 @@ public class EmptySmartView extends View {
   public static final int MODE_EMPTY_VIDEO = 13;
   public static final int MODE_EMPTY_RESTRICTED = 14;
   public static final int MODE_EMPTY_RESULTS = 15;
+  public static final int MODE_EMPTY_POLLS = 16;
 
   private Letters title, description;
   private Drawable icon;
@@ -65,6 +66,12 @@ public class EmptySmartView extends View {
       int titleRes, descRes;
 
       switch (mode) {
+        case MODE_EMPTY_POLLS: {
+          titleRes = R.string.NoPollsToShow;
+          descRes = isChannel ? R.string.NoPollsToShowInChannel : R.string.NoPollsToShowInChat;
+          iconRes = R.drawable.baseline_poll_24;
+          break;
+        }
         case MODE_EMPTY_MEDIA: {
           titleRes = R.string.NoMediaToShow;
           descRes = isChannel ? R.string.NoMediaToShowInChannel : R.string.NoMediaToShowInChat;

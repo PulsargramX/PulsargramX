@@ -2185,6 +2185,8 @@ public class TD {
       throw new NullPointerException();
     }
     switch (message.content.getConstructor()) {
+      case TdApi.MessagePoll.CONSTRUCTOR:
+        return TdApi.SearchMessagesFilterPoll.CONSTRUCTOR;
       case TdApi.MessageAudio.CONSTRUCTOR:
         return TdApi.SearchMessagesFilterAudio.CONSTRUCTOR;
       case TdApi.MessageVideoNote.CONSTRUCTOR:

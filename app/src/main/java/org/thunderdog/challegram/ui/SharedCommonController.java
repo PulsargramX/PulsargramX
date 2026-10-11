@@ -25,25 +25,30 @@ import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.data.InlineResult;
 import org.thunderdog.challegram.data.InlineResultCommon;
 import org.thunderdog.challegram.data.InlineResultMultiline;
+import org.thunderdog.challegram.data.InlineResultPoll;
 import org.thunderdog.challegram.mediaview.MediaViewThumbLocation;
 import org.thunderdog.challegram.mediaview.data.MediaItem;
 import org.thunderdog.challegram.player.TGPlayerController;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.telegram.PollListener;
 import org.thunderdog.challegram.telegram.TdlibUi;
 import org.thunderdog.challegram.v.MediaRecyclerView;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
 
 import tgx.td.MessageId;
 import tgx.td.Td;
 
-public class SharedCommonController extends SharedBaseController<InlineResult<?>> implements View.OnClickListener, TGPlayerController.TrackChangeListener, TGPlayerController.PlayListBuilder {
+public class SharedCommonController extends SharedBaseController<InlineResult<?>> implements View.OnClickListener, TGPlayerController.TrackChangeListener, TGPlayerController.PlayListBuilder, PollListener {
   public SharedCommonController (Context context, Tdlib tdlib) {
     super(context, tdlib);
   }
 
   private TdApi.SearchMessagesFilter filter;
+  private final Set<Long> observedPollIds = new HashSet<>();
 
   public SharedCommonController setFilter (TdApi.SearchMessagesFilter filter) {
     this.filter = filter;
@@ -60,6 +65,10 @@ public class SharedCommonController extends SharedBaseController<InlineResult<?>
 
   @Override
   public void destroy () {
+    for (long pollId : observedPollIds) {
+      tdlib.listeners().removePollListener(pollId, this);
+    }
+    observedPollIds.clear();
     super.destroy();
     if (filter != null && filter.getConstructor() == TdApi.SearchMessagesFilterAudio.CONSTRUCTOR) {
       tdlib.context().player().removeTrackChangeListener(this);
@@ -69,6 +78,8 @@ public class SharedCommonController extends SharedBaseController<InlineResult<?>
   @Override
   public CharSequence getName () {
     switch (filter.getConstructor()) {
+      case TdApi.SearchMessagesFilterPoll.CONSTRUCTOR:
+        return Lang.getString(R.string.TabPolls);
       case TdApi.SearchMessagesFilterDocument.CONSTRUCTOR:
         return Lang.getString(R.string.TabDocs);
       case TdApi.SearchMessagesFilterAudio.CONSTRUCTOR:
@@ -84,6 +95,8 @@ public class SharedCommonController extends SharedBaseController<InlineResult<?>
   @Override
   public int getIcon () {
     switch (filter.getConstructor()) {
+      case TdApi.SearchMessagesFilterPoll.CONSTRUCTOR:
+        return R.drawable.baseline_poll_24;
       case TdApi.SearchMessagesFilterDocument.CONSTRUCTOR:
         return R.drawable.baseline_insert_drive_file_24;
       case TdApi.SearchMessagesFilterAudio.CONSTRUCTOR:
@@ -132,6 +145,10 @@ public class SharedCommonController extends SharedBaseController<InlineResult<?>
           break;
         }
         case InlineResult.TYPE_ARTICLE: {
+          if (result instanceof InlineResultPoll) {
+            new SharedPollActions(this, result.getMessage(), v).show();
+            break;
+          }
           tdlib.ui().openMessage(this, chatId, new MessageId(chatId, result.getQueryId()), new TdlibUi.UrlOpenParameters().tooltip(context().tooltipManager().builder(v)));
           break;
         }
@@ -151,7 +168,18 @@ public class SharedCommonController extends SharedBaseController<InlineResult<?>
     TdApi.Message message = (TdApi.Message) object;
     InlineResult<?> result;
 
-    if (filter != null && filter.getConstructor() == TdApi.SearchMessagesFilterUrl.CONSTRUCTOR) {
+    if (filter != null && filter.getConstructor() == TdApi.SearchMessagesFilterPoll.CONSTRUCTOR) {
+      if (message.content.getConstructor() != TdApi.MessagePoll.CONSTRUCTOR) {
+        return null;
+      }
+      long pollId = ((TdApi.MessagePoll) message.content).poll.id;
+      tdlib.ui().post(() -> {
+        if (!isDestroyed() && observedPollIds.add(pollId)) {
+          tdlib.listeners().addPollListener(pollId, this);
+        }
+      });
+      result = new InlineResultPoll(context, tdlib, message);
+    } else if (filter != null && filter.getConstructor() == TdApi.SearchMessagesFilterUrl.CONSTRUCTOR) {
       result = new InlineResultMultiline(context, tdlib, message);
     } else {
       result = InlineResult.valueOf(context, tdlib, message);
@@ -169,6 +197,9 @@ public class SharedCommonController extends SharedBaseController<InlineResult<?>
   @Override
   protected CharSequence buildTotalCount (ArrayList<InlineResult<?>> data) {
     switch (filter.getConstructor()) {
+      case TdApi.SearchMessagesFilterPoll.CONSTRUCTOR: {
+        return Lang.pluralBold(R.string.xPolls, data.size());
+      }
       case TdApi.SearchMessagesFilterAudio.CONSTRUCTOR: {
         return Lang.pluralBold(R.string.xAudios, data.size());
       }
@@ -188,6 +219,33 @@ public class SharedCommonController extends SharedBaseController<InlineResult<?>
   @Override
   protected int provideViewType () {
     return ListItem.TYPE_CUSTOM_INLINE;
+  }
+
+  @Override
+  public void onUpdatePoll (TdApi.Poll updatedPoll) {
+    tdlib.ui().post(() -> {
+      if (isDestroyed()) {
+        return;
+      }
+      updatePollRows(data, updatedPoll);
+      updatePollRows(searchData, updatedPoll);
+    });
+  }
+
+  private void updatePollRows (ArrayList<InlineResult<?>> rows, TdApi.Poll updatedPoll) {
+    if (rows == null) {
+      return;
+    }
+    for (InlineResult<?> row : new ArrayList<>(rows)) {
+      TdApi.Message message = row.getMessage();
+      if (message != null && message.content.getConstructor() == TdApi.MessagePoll.CONSTRUCTOR) {
+        TdApi.MessagePoll content = (TdApi.MessagePoll) message.content;
+        if (content.poll.id == updatedPoll.id) {
+          editMessage(message.id, new TdApi.MessagePoll(updatedPoll, content.description,
+            content.media, content.canAddOption));
+        }
+      }
+    }
   }
 
   // Playback

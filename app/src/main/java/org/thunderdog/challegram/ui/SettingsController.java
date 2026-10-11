@@ -894,6 +894,7 @@ public class SettingsController extends ViewController<Void> implements
     }
     executeOnUiThreadOptional(() -> {
       this.userFull = userFull;
+      headerCell.setProfileAudio(tdlib.myUserId(), userFull.firstProfileAudio);
       checkBirthdate();
       adapter.updateValuedSettingById(R.id.btn_personalChannel);
       setBio(userFull.bio);

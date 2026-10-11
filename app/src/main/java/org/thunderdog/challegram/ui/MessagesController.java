@@ -384,9 +384,9 @@ public class MessagesController extends ViewController<MessagesController.Argume
   private WallpaperParametersView backgroundParamsView;
 
   private CircleCounterBadgeView goToNextFoundMessageButtonBadge, goToPrevFoundMessageButtonBadge;
-  private FrameLayoutFix scrollToBottomButtonWrap, mentionButtonWrap, reactionsButtonWrap;
-  private CircleButton scrollToBottomButton, mentionButton, reactionsButton;
-  private CounterBadgeView unreadCountView, mentionCountView, reactionsCountView;
+  private FrameLayoutFix scrollToBottomButtonWrap, mentionButtonWrap, reactionsButtonWrap, pollVotesButtonWrap;
+  private CircleButton scrollToBottomButton, mentionButton, reactionsButton, pollVotesButton;
+  private CounterBadgeView unreadCountView, mentionCountView, reactionsCountView, pollVotesCountView;
 
   public MessagesController (Context context, Tdlib tdlib) {
     super(context, tdlib);
@@ -797,9 +797,13 @@ public class MessagesController extends ViewController<MessagesController.Argume
 
         @Override
         public boolean onTouchEvent (MotionEvent event) {
-          if (event.getAction() == MotionEvent.ACTION_UP && isEnabled() && emojiShown) {
+          if (event.getAction() == MotionEvent.ACTION_UP && isEnabled()) {
             // Android opens the IME inside super; prepare the panel swap before its insets.
-            emojiKeyboardFrameLayout.prepareKeyboardShow();
+            if (emojiShown) {
+              emojiKeyboardFrameLayout.prepareKeyboardShow();
+            } else if (commandsShown) {
+              keyboardLayout.prepareKeyboardShow();
+            }
           }
           boolean r = super.onTouchEvent(event);
           inputViewDisabledClickHelper.onTouchEvent(this, event);
@@ -1082,6 +1086,47 @@ public class MessagesController extends ViewController<MessagesController.Argume
     reactionsButtonWrap.addView(reactionsCountView);
 
     setReactionButtonFactor(0f);
+
+    // Poll vote button
+
+    params = new RelativeLayout.LayoutParams(Screen.dp(118f), Screen.dp(74f));
+    params.addRule(RelativeLayout.ALIGN_PARENT_RIGHT);
+    params.addRule(RelativeLayout.ABOVE, R.id.msg_bottom);
+
+    pollVotesButtonWrap = new FrameLayoutFix(context);
+    pollVotesButtonWrap.setLayoutParams(params);
+
+    fparams = FrameLayoutFix.newParams(Screen.dp(24f) * 2 + padding * 2, Screen.dp(24f) * 2 + padding * 2, Gravity.RIGHT | Gravity.BOTTOM);
+    params.rightMargin = params.bottomMargin = Screen.dp(16f) - padding;
+
+    pollVotesButton = new CircleButton(context(), tdlib);
+    pollVotesButton.setId(R.id.btn_pollVote);
+    pollVotesButton.setOnClickListener(this);
+    addThemeInvalidateListener(pollVotesButton);
+    pollVotesButton.init(R.drawable.baseline_poll_24, 48f, 4f, ColorId.circleButtonChat, ColorId.circleButtonChatIcon);
+    pollVotesButton.setLayoutParams(fparams);
+    pollVotesButton.setOnClickListener(this);
+    pollVotesButton.setOnLongClickListener(v -> {
+      long chatId = getChatId();
+      if (chatId != 0 && !isDestroyed()) {
+        tdlib.send(forumTopic != null ? new TdApi.ReadAllForumTopicPollVotes(chatId, forumTopic.info.forumTopicId) : new TdApi.ReadAllChatPollVotes(chatId), tdlib.typedOkHandler());
+        return true;
+      }
+      return false;
+    });
+
+    fparams = FrameLayoutFix.newParams(buttonPadding + fparams.width, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.RIGHT | Gravity.BOTTOM);
+    fparams.bottomMargin = Screen.dp(24f) * 2 - Screen.dp(28f) / 2;
+
+    pollVotesCountView = new CounterBadgeView(context);
+    pollVotesCountView.setLayoutParams(fparams);
+    pollVotesCountView.setPadding(buttonPadding, 0, 0, 0);
+    addThemeInvalidateListener(pollVotesCountView);
+    pollVotesButton.setTag(pollVotesCountView);
+    pollVotesButtonWrap.addView(pollVotesButton);
+    pollVotesButtonWrap.addView(pollVotesCountView);
+
+    setPollVoteButtonFactor(0f);
 
     goToNextFoundMessageButtonBadge = new CircleCounterBadgeView(this, R.id.btn_search_next, this, null);
     goToNextFoundMessageButtonBadge.init(R.drawable.baseline_keyboard_arrow_up_24, 48f, 4f, ColorId.circleButtonChat, ColorId.circleButtonChatIcon);
@@ -1515,6 +1560,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
     contentView.addView(topBar);
     contentView.addView(bottomBar);
     contentView.addView(reactionsButtonWrap);
+    contentView.addView(pollVotesButtonWrap);
     contentView.addView(mentionButtonWrap);
     contentView.addView(scrollToBottomButtonWrap);
     contentView.addView(goToNextFoundMessageButtonBadge);
@@ -2170,6 +2216,8 @@ public class MessagesController extends ViewController<MessagesController.Argume
       scrollToUnreadOrStartMessage();
     } else if (viewId == R.id.btn_mention) {
       manager.scrollToNextMention();
+    } else if (viewId == R.id.btn_pollVote) {
+      manager.scrollToNextUnreadPollVote();
     } else if (viewId == R.id.btn_reaction) {
       manager.scrollToNextUnreadReaction();
     } else if (viewId == R.id.msg_command) {
@@ -2420,6 +2468,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
       }
       Td.put(outState, keyPrefix + "topicId", args.messageTopicId);
       Td.put(outState, keyPrefix + "filter_", args.searchFilter);
+      outState.putString(keyPrefix + "poll_option_id", args.highlightPollOptionId);
       if (args.constructor == 1 || args.constructor == 4) {
         outState.putInt(keyPrefix + "mode", args.highlightMode);
         if (args.highlightMessageId != null) {
@@ -2490,6 +2539,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
     if (args != null) {
       super.restoreInstanceState(in, keyPrefix);
       args.areScheduled = in.getBoolean(keyPrefix + "scheduled", false);
+      args.highlightPollOptionId = in.getString(keyPrefix + "poll_option_id");
       setArguments(args);
       return true;
     }
@@ -2504,6 +2554,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
     public final MessageId highlightMessageId;
     public final int highlightMode;
     public @Nullable TdApi.InputTextQuote highlightQuote;
+    public @Nullable String highlightPollOptionId;
 
     public final boolean inPreviewMode;
     public final int previewMode;
@@ -2640,6 +2691,11 @@ public class MessagesController extends ViewController<MessagesController.Argume
       return this;
     }
 
+    public Arguments highlightPollOption (@Nullable String optionId) {
+      this.highlightPollOptionId = optionId;
+      return this;
+    }
+
     public Arguments setForumTopic (TdApi.ForumTopic forumTopic) {
       this.forumTopic = forumTopic;
       return this;
@@ -2742,7 +2798,8 @@ public class MessagesController extends ViewController<MessagesController.Argume
     this.previewSearchQuery = args.searchQuery;
     this.previewSearchSender = args.searchSender;
     this.previewSearchFilter = args.searchFilter;
-    this.manager.setHighlightMessageId(args.highlightMessageId, args.highlightMode, args.highlightQuote);
+    this.manager.setHighlightMessageId(args.highlightMessageId, args.highlightMode,
+      args.highlightQuote, args.highlightPollOptionId);
     this.inPreviewMode = args.inPreviewMode;
     this.previewMode = args.previewMode;
     this.openKeyboard = args.openKeyboard;
@@ -3101,15 +3158,18 @@ public class MessagesController extends ViewController<MessagesController.Argume
         setUnreadCountBadge(unreadCount, animated);
         setMentionCountBadge(0);
         setReactionCountBadge(0);
+        setPollVoteCountBadge(forumTopic != null ? forumTopic.unreadPollVoteCount : 0);
       } else if (forumTopic != null) {
         // Use forum topic's unread count instead of chat's total unread count
         setUnreadCountBadge(forumTopic.unreadCount, animated);
         setMentionCountBadge(forumTopic.unreadMentionCount);
         setReactionCountBadge(forumTopic.unreadReactionCount);
+        setPollVoteCountBadge(forumTopic.unreadPollVoteCount);
       } else {
         setUnreadCountBadge(chat.unreadCount, true);
         setMentionCountBadge(chat.unreadMentionCount);
         setReactionCountBadge(chat.unreadReactionCount);
+        setPollVoteCountBadge(chat.unreadPollVoteCount);
       }
       if (bottomButtonAction == BOTTOM_ACTION_TOGGLE_MUTE) {
         showBottomButton(bottomButtonAction, 0, animated);
@@ -3452,6 +3512,9 @@ public class MessagesController extends ViewController<MessagesController.Argume
     RelativeLayout.LayoutParams params3 = (RelativeLayout.LayoutParams) reactionsButtonWrap.getLayoutParams();
     RelativeLayout.LayoutParams params4 = (RelativeLayout.LayoutParams) goToNextFoundMessageButtonBadge.getLayoutParams();
     RelativeLayout.LayoutParams params5 = (RelativeLayout.LayoutParams) goToPrevFoundMessageButtonBadge.getLayoutParams();
+    RelativeLayout.LayoutParams pollParams = (RelativeLayout.LayoutParams) pollVotesButtonWrap.getLayoutParams();
+    pollParams.addRule(RelativeLayout.ABOVE, visible ? R.id.msg_bottom : 0);
+    pollParams.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM, visible ? 0 : RelativeLayout.TRUE);
     if (visible) {
       params1.addRule(RelativeLayout.ABOVE, R.id.msg_bottom);
       params1.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM, 0);
@@ -4545,6 +4608,9 @@ public class MessagesController extends ViewController<MessagesController.Argume
       requestsView.performDestroy();
     }
 
+    if (pollVotesButton != null) {
+      pollVotesButton.performDestroy();
+    }
     if (reactionsButton != null) {
       reactionsButton.performDestroy();
     }
@@ -6125,6 +6191,11 @@ public class MessagesController extends ViewController<MessagesController.Argume
       } else if (id == R.id.btn_chatTranslateOff) {
         stopTranslateMessages(selectedMessage);
         return true;
+      } else if (id == R.id.btn_profileAudio) {
+        TdApi.Message[] songs = selectedMessage.getAllMessages();
+        if (songs.length == 1) tdlib.profileMusic().showSaveOptions(this, songs[0]);
+        else tdlib.profileMusic().addAll(songs, null);
+        return true;
       } else if (id == R.id.btn_saveGif) {
         if (selectedMessageTag != null) {
           if (!selectedMessage.canBeSaved()) {
@@ -6166,6 +6237,15 @@ public class MessagesController extends ViewController<MessagesController.Argume
         TdApi.File file = TD.getFile(selectedMessage);
         if (file != null && file.local.isDownloadingActive && !tdlib.context().player().isPlayingFileId(file.id)) {
           tdlib.files().cancelDownloadOrUploadFile(file.id, false, true);
+        }
+        return true;
+      } else if (id == R.id.btn_pollStatistics) {
+        if (selectedMessage.lastMessageProperties().canGetPollVoteStatistics) {
+          cancelSheduledKeyboardOpeningAndHideAllKeyboards();
+          TdApi.Message message = selectedMessage.getMessage();
+          PollStatisticsController statsController = new PollStatisticsController(context, tdlib);
+          statsController.setArguments(new PollStatisticsController.Args(message.chatId, message.id));
+          navigateTo(statsController);
         }
         return true;
       } else if (id == R.id.btn_viewStatistics) {
@@ -6686,6 +6766,55 @@ public class MessagesController extends ViewController<MessagesController.Argume
 
 
 
+  private static final int ANIMATOR_POLL_VOTE_BUTTON = 23;
+  private FactorAnimator pollVoteButtonAnimator;
+  private boolean pollVoteButtonVisible;
+  private float pollVoteButtonFactor = 1f;
+  private int pollVoteCountBadge;
+
+  private void setPollVoteButtonVisible (boolean visible, boolean animated) {
+    if (this.pollVoteButtonVisible != visible) {
+      this.pollVoteButtonVisible = visible;
+      final float toFactor = visible ? 1f : 0f;
+      if (animated) {
+        if (pollVoteButtonAnimator == null) {
+          pollVoteButtonAnimator = new FactorAnimator(ANIMATOR_POLL_VOTE_BUTTON, this, AnimatorUtils.DECELERATE_INTERPOLATOR, 180l, this.pollVoteButtonFactor);
+        }
+        pollVoteButtonAnimator.animateTo(toFactor);
+      } else {
+        if (pollVoteButtonAnimator != null) {
+          pollVoteButtonAnimator.forceFactor(toFactor);
+        }
+        setPollVoteButtonFactor(toFactor);
+      }
+    }
+  }
+
+  private void setPollVoteCountBadge (int pollVoteCount) {
+    if (pollVoteCount > 0 && (inPreviewMode || isInForceTouchMode() || areScheduledOnly())) {
+      return;
+    }
+    if (pollVoteCountBadge != pollVoteCount) {
+      pollVoteCountBadge = pollVoteCount;
+      boolean visible = pollVoteCount > 0;
+      boolean animate = isFocused();
+      pollVotesCountView.setCounter(pollVoteCount, true, animate && pollVoteButtonFactor > 0f);
+      setPollVoteButtonVisible(visible, animate);
+    }
+
+  }
+
+  private void setPollVoteButtonFactor (float factor) {
+    if (this.pollVoteButtonFactor != factor) {
+      this.pollVoteButtonFactor = factor;
+      float range = MathUtils.clamp(factor);
+      pollVotesButtonWrap.setAlpha(range);
+      updateBottomBarStyle();
+    }
+  }
+
+
+
   // Etc
 
   public void startSwipe (View view) {
@@ -6704,9 +6833,10 @@ public class MessagesController extends ViewController<MessagesController.Argume
 
   public void highlightMessage (MessageId messageId, @Nullable TdlibUi.UrlOpenParameters parameters) {
     if (parameters != null && parameters.messageId != null && parameters.messageId.getChatId() == messageId.getChatId()) {
-      highlightMessage(messageId, parameters.messageId, parameters.highlightQuote);
+      highlightMessage(messageId, parameters.messageId, parameters.highlightQuote, parameters.pollOptionId);
     } else {
-      highlightMessage(messageId, (long[]) null, parameters != null ? parameters.highlightQuote : null);
+      highlightMessage(messageId, (long[]) null, parameters != null ? parameters.highlightQuote : null,
+        parameters != null ? parameters.pollOptionId : null);
     }
   }
 
@@ -6720,13 +6850,18 @@ public class MessagesController extends ViewController<MessagesController.Argume
 
   public void highlightMessage (MessageId messageId, MessageId fromMessageId,
                                 @Nullable TdApi.InputTextQuote quote) {
+    highlightMessage(messageId, fromMessageId, quote, null);
+  }
+
+  public void highlightMessage (MessageId messageId, MessageId fromMessageId,
+                                @Nullable TdApi.InputTextQuote quote, @Nullable String pollOptionId) {
     if (inOnlyFoundMode()) {
-      manager.setHighlightMessageId(messageId, MessagesManager.HIGHLIGHT_MODE_NORMAL, quote);
+      manager.setHighlightMessageId(messageId, MessagesManager.HIGHLIGHT_MODE_NORMAL, quote, pollOptionId);
       onSetSearchFilteredShowMode(false);
       return;
     }
     long[] returnToMessageIds = manager.extendReturnToMessageIdStack(fromMessageId);
-    highlightMessage(messageId, returnToMessageIds, quote);
+    highlightMessage(messageId, returnToMessageIds, quote, pollOptionId);
   }
 
   public void highlightMessage (MessageId messageId, long[] returnToMessageIds) {
@@ -6735,13 +6870,19 @@ public class MessagesController extends ViewController<MessagesController.Argume
 
   public void highlightMessage (MessageId messageId, long[] returnToMessageIds,
                                 @Nullable TdApi.InputTextQuote quote) {
+    highlightMessage(messageId, returnToMessageIds, quote, null);
+  }
+
+  public void highlightMessage (MessageId messageId, long[] returnToMessageIds,
+                                @Nullable TdApi.InputTextQuote quote, @Nullable String pollOptionId) {
     if (inPreviewSearchMode()) {
       tdlib.ui().openMessage(this, getChatId(), messageId,
-        new TdlibUi.UrlOpenParameters().controller(this).highlightQuote(quote));
+        new TdlibUi.UrlOpenParameters().controller(this).highlightQuote(quote)
+          .highlightPollOption(pollOptionId));
       return;
     }
     manager.highlightMessage(messageId, MessagesManager.HIGHLIGHT_MODE_NORMAL,
-      returnToMessageIds, pagerScrollPosition == 0, quote);
+      returnToMessageIds, pagerScrollPosition == 0, quote, pollOptionId);
     showMessagesListIfNeeded();
   }
 
@@ -7252,6 +7393,9 @@ public class MessagesController extends ViewController<MessagesController.Argume
 
     if (reactionsButtonWrap != null) {
       reactionsButtonWrap.setTranslationY(getReactionButtonY());
+    }
+    if (pollVotesButtonWrap != null) {
+      pollVotesButtonWrap.setTranslationY(getReactionButtonY() - Screen.dp(58f) * reactionButtonFactor);
     }
     if (goToPrevFoundMessageButtonBadge != null) {
       goToPrevFoundMessageButtonBadge.setTranslationY(offsetY);
@@ -7792,12 +7936,14 @@ public class MessagesController extends ViewController<MessagesController.Argume
     // Check if messages can be copied and if they have captions
     boolean canBeCopied = true;
     boolean hasCaption = false;
+    boolean canAddProfileMusic = true;
     
     for (int i = 0; i < selectedMessageIds.size(); i++) {
       long messageId = selectedMessageIds.keyAt(i);
       TGMessage tgMessage = selectedMessageIds.valueAt(i);
       TdApi.Message message = tgMessage.getMessage(messageId);
       TdApi.MessageProperties properties = tgMessage.lastMessageProperties(messageId);
+      canAddProfileMusic &= org.thunderdog.challegram.telegram.TdlibProfileMusic.canSave(message);
       
       if (properties != null && !properties.canBeCopied) {
         canBeCopied = false;
@@ -7811,6 +7957,12 @@ public class MessagesController extends ViewController<MessagesController.Argume
     IntList ids = new IntList(2);
     StringList strings = new StringList(2);
     IntList icons = new IntList(2);
+
+    if (canAddProfileMusic) {
+      ids.append(R.id.btn_profileAudio);
+      strings.append(R.string.AudioAddToProfile);
+      icons.append(R.drawable.baseline_music_note_24);
+    }
 
     if (canBeCopied) {
       ids.append(R.id.btn_forwardAsCopy);
@@ -7831,7 +7983,12 @@ public class MessagesController extends ViewController<MessagesController.Argume
     }
 
     showOptions(null, ids.get(), strings.get(), null, icons.get(), (itemView, id) -> {
-      if (id == R.id.btn_forwardAsCopy) {
+      if (id == R.id.btn_profileAudio) {
+        MessageWithProperties[] selected = selectedMessagesToArray();
+        TdApi.Message[] songs = new TdApi.Message[selected.length];
+        for (int i = 0; i < selected.length; i++) songs[i] = selected[i].message;
+        tdlib.profileMusic().addAll(songs, () -> finishSelectMode(-1));
+      } else if (id == R.id.btn_forwardAsCopy) {
         shareMessagesWithOptions(true, false);
       } else if (id == R.id.btn_forwardWithoutCaption) {
         shareMessagesWithOptions(true, true);
@@ -7995,7 +8152,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
     if (personal && commandsShown) {
       commandsState = false;
     }
-    closeCommandsKeyboardImpl(true, false);
+    closeCommandsKeyboardImpl(true, false, false);
   }
 
   private boolean commandsShown;
@@ -8008,6 +8165,9 @@ public class MessagesController extends ViewController<MessagesController.Argume
   private void setCommandsShown (boolean commandsShown) {
     if (this.commandsShown != commandsShown) {
       this.commandsShown = commandsShown;
+      if (!commandsShown && keyboardLayout != null) {
+        keyboardLayout.cancelKeyboardTransition();
+      }
       updateBottomWrapOffset();
     }
   }
@@ -8021,10 +8181,10 @@ public class MessagesController extends ViewController<MessagesController.Argume
   }
 
   private void closeCommandsKeyboard (boolean byUserEvent) {
-    closeCommandsKeyboardImpl(false, byUserEvent);
+    closeCommandsKeyboardImpl(false, byUserEvent, false);
   }
 
-  private void closeCommandsKeyboardImpl (boolean destroy, boolean byUserEvent) {
+  private void closeCommandsKeyboardImpl (boolean destroy, boolean byUserEvent, boolean byKeyboardOpen) {
     if (commandsShown) {
       if (keyboardWrapper != null) {
         keyboardWrapper.setVisibility(View.GONE);
@@ -8032,11 +8192,11 @@ public class MessagesController extends ViewController<MessagesController.Argume
 
       // updateButtonsY();
 
-      if (commandsState && isFocused()) {
+      setCommandsShown(false);
+      if (commandsState && isFocused() && !byKeyboardOpen) {
         keyboardLayout.showKeyboard(inputView);
       }
 
-      setCommandsShown(false);
       if (destroy) {
         updateCommandButton(R.drawable.deproko_baseline_bots_command_26);
       } else {
@@ -8085,7 +8245,6 @@ public class MessagesController extends ViewController<MessagesController.Argume
       Views.applyBottomInset(keyboardWrapper, extraBottomInsetWithoutIme);
 
       bottomWrap.addView(keyboardWrapper);
-      contentView.getViewTreeObserver().addOnPreDrawListener(keyboardLayout);
       keyboardWrapper.setVisibility(View.GONE);
     }
 
@@ -8462,7 +8621,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
   @Override
   public void onDestroyCommandKeyboard () {
     clearScheduledKeyboard();
-    closeCommandsKeyboardImpl(true, false);
+    closeCommandsKeyboardImpl(true, false, false);
     updateCommandButton(R.drawable.deproko_baseline_bots_command_26);
     if (commandsMessageId != 0) {
       botHelper.onDestroyKeyboard(commandsMessageId);
@@ -9051,6 +9210,11 @@ public class MessagesController extends ViewController<MessagesController.Argume
         updateBottomBarStyle();
         break;
       }
+      case ANIMATOR_POLL_VOTE_BUTTON: {
+        setPollVoteButtonFactor(factor);
+        checkScrollButtonOffsets();
+        break;
+      }
       case ANIMATOR_REACTION_BUTTON: {
         setReactionButtonFactor(factor);
         checkScrollButtonOffsets();
@@ -9302,7 +9466,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
         closeEmojiKeyboard(true);
       }
       if (commandsShown) {
-        closeCommandsKeyboard(true);
+        closeCommandsKeyboardImpl(false, true, true);
       }
     }
     boolean result = super.onKeyboardStateChanged(visible);
@@ -9311,7 +9475,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
     if (emojiKeyboardFrameLayout != null) {
       emojiKeyboardFrameLayout.onKeyboardStateChanged(visible);
     }
-    if (isFocused() && commandsShown && keyboardLayout != null) {
+    if (keyboardLayout != null) {
       keyboardLayout.onKeyboardStateChanged(visible);
     }
     return result;
@@ -10585,7 +10749,11 @@ public class MessagesController extends ViewController<MessagesController.Argume
       for (int i = 0; i < content.length; i++) {
         final TdApi.FormattedText caption = i == content.length - 1 ? lastFileCaption : null;
         MediaBottomFilesController.MusicEntry musicFile = musicFiles.get(i);
-        content[i] = tdlib.filegen().createThumbnail(new TdApi.InputMessageAudio(new TdApi.InputAudio(TD.createInputFile(musicFile.getPath(), musicFile.getMimeType()), null, (int) (musicFile.getDuration() / 1000l), musicFile.getTitle(), musicFile.getArtist()), caption), isSecretChat());
+        TdApi.InputAudio inputAudio = musicFile.profileAudio != null ?
+          org.thunderdog.challegram.telegram.TdlibProfileMusic.input(musicFile.profileAudio) :
+          new TdApi.InputAudio(TD.createInputFile(musicFile.getPath(), musicFile.getMimeType()),
+            null, (int) (musicFile.getDuration() / 1000l), musicFile.getTitle(), musicFile.getArtist());
+        content[i] = tdlib.filegen().createThumbnail(new TdApi.InputMessageAudio(inputAudio, caption), isSecretChat());
       }
       ReplyInfo replyInfo = allowReply ? obtainReplyTo() : null;
       TdApi.InputMessageReplyTo replyTo = replyInfo != null ? replyInfo.toInputMessageReply() : null;
@@ -11403,6 +11571,15 @@ public class MessagesController extends ViewController<MessagesController.Argume
   }
 
   @Override
+  public void onChatUnreadPollVoteCount (long chatId, int unreadPollVoteCount, boolean availabilityChanged) {
+    tdlib.ui().post(() -> {
+      if (!isDestroyed() && getChatId() == chatId) {
+        updateCounters(true);
+      }
+    });
+  }
+
+  @Override
   public void onChatUnreadReactionCount (long chatId, int unreadReactionCount, boolean availabilityChanged) {
     tdlib.ui().post(() -> {
       if (getChatId() == chatId) {
@@ -11412,7 +11589,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
   }
 
   @Override
-  public void onForumTopicUpdated (long chatId, long messageThreadId, boolean isPinned, long lastReadInboxMessageId, long lastReadOutboxMessageId, int unreadMentionCount, int unreadReactionCount, TdApi.ChatNotificationSettings notificationSettings, TdApi.DraftMessage draftMessage) {
+  public void onForumTopicUpdated (long chatId, long messageThreadId, boolean isPinned, long lastReadInboxMessageId, long lastReadOutboxMessageId, int unreadMentionCount, int unreadReactionCount, int unreadPollVoteCount, TdApi.ChatNotificationSettings notificationSettings, TdApi.DraftMessage draftMessage) {
     tdlib.ui().post(() -> {
       if (forumTopic == null || getChatId() != chatId || forumTopic.info.forumTopicId != messageThreadId) {
         return;
@@ -11424,6 +11601,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
       forumTopic.lastReadOutboxMessageId = lastReadOutboxMessageId;
       forumTopic.unreadMentionCount = unreadMentionCount;
       forumTopic.unreadReactionCount = unreadReactionCount;
+      forumTopic.unreadPollVoteCount = unreadPollVoteCount;
       if (notificationSettings != null) {
         forumTopic.notificationSettings = notificationSettings;
       }
@@ -12753,6 +12931,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
     }
     if (reactionsButtonWrap != null) {
       reactionsButtonWrap.setTranslationX(translationX);
+      pollVotesButtonWrap.setTranslationX(translationX);
     }
     if (goToNextFoundMessageButtonBadge != null) {
       goToNextFoundMessageButtonBadge.setTranslationX(translationX2);

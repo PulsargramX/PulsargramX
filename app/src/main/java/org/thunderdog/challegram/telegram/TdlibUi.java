@@ -2402,6 +2402,7 @@ public class TdlibUi extends Handler {
     controller.setArguments(arguments
       .setScheduled(onlyScheduled)
       .highlightQuote(urlOpenParameters != null ? urlOpenParameters.highlightQuote : null)
+      .highlightPollOption(urlOpenParameters != null ? urlOpenParameters.pollOptionId : null)
       .referrer(referrer)
       .voiceChatInvitation(voiceChatInvitation)
       .fillDraft(forceDraft)
@@ -2615,6 +2616,8 @@ public class TdlibUi extends Handler {
   }
 
   public void openMessage (final TdlibDelegate context, final TdApi.MessageLinkInfo messageLink, final @Nullable UrlOpenParameters openParameters) {
+    final UrlOpenParameters messageParameters = new UrlOpenParameters(openParameters)
+      .highlightPollOption(messageLink.pollOptionId);
     if (messageLink.message != null) {
       // TODO support for album, media timestamp, etc
       MessageId messageId = new MessageId(messageLink.message.chatId, messageLink.message.id);
@@ -2622,7 +2625,7 @@ public class TdlibUi extends Handler {
         // FIXME TDLib/Server: need GetMessageThread alternative that accepts (chatId, messageThreadId)
         context.tdlib().send(new TdApi.GetMessageThread(messageId.getChatId(), messageId.getMessageId()), (messageThreadInfo, error) -> {
           if (error != null) {
-            openMessage(context, messageLink.chatId, messageId, openParameters);
+            openMessage(context, messageLink.chatId, messageId, messageParameters);
           } else {
             ThreadInfo messageThread = ThreadInfo.openedFromMessage(context.tdlib(), messageThreadInfo, openParameters != null ? openParameters.messageId : null);
             if (Config.SHOW_CHANNEL_POST_REPLY_INFO_IN_COMMENTS) {
@@ -2641,12 +2644,12 @@ public class TdlibUi extends Handler {
                       repliedMessage.content
                     );
                   }
-                  openMessage(context, messageThread.getChatId(), messageId, messageThread, openParameters);
+                  openMessage(context, messageThread.getChatId(), messageId, messageThread, messageParameters);
                 });
                 return;
               }
             }
-            openMessage(context, messageThread.getChatId(), messageId, messageThread, openParameters);
+            openMessage(context, messageThread.getChatId(), messageId, messageThread, messageParameters);
           }
         });
       } else if (messageLink.topicId != null && messageLink.topicId.getConstructor() == TdApi.MessageTopicForum.CONSTRUCTOR) {
@@ -2656,9 +2659,9 @@ public class TdlibUi extends Handler {
           .highlightMessage(messageId)
           .ensureHighlightAvailable()
           .messageTopic(messageLink.topicId)
-          .urlOpenParameters(openParameters));
+          .urlOpenParameters(messageParameters));
       } else {
-        openMessage(context, messageLink.chatId, messageId, openParameters);
+        openMessage(context, messageLink.chatId, messageId, messageParameters);
       }
     } else {
       if (tdlib.chat(messageLink.chatId) != null) {
@@ -2848,6 +2851,7 @@ public class TdlibUi extends Handler {
 
     public MessageId messageId;
     public @Nullable TdApi.InputTextQuote highlightQuote;
+    public @Nullable String pollOptionId;
     public String refererUrl, instantViewFallbackUrl, originalUrl;
     public TooltipOverlayView.TooltipBuilder tooltip;
     public boolean requireOpenPrompt, ignoreExplicitUserInteraction, forceDirectMessagesChat;
@@ -2865,6 +2869,7 @@ public class TdlibUi extends Handler {
         this.embedViewMode = options.embedViewMode;
         this.messageId = options.messageId;
         this.highlightQuote = options.highlightQuote;
+        this.pollOptionId = options.pollOptionId;
         this.refererUrl = options.refererUrl;
         this.instantViewFallbackUrl = options.instantViewFallbackUrl;
         this.tooltip = options.tooltip;
@@ -2890,6 +2895,11 @@ public class TdlibUi extends Handler {
 
     public UrlOpenParameters highlightQuote (@Nullable TdApi.InputTextQuote quote) {
       this.highlightQuote = quote;
+      return this;
+    }
+
+    public UrlOpenParameters highlightPollOption (@Nullable String optionId) {
+      this.pollOptionId = optionId;
       return this;
     }
 

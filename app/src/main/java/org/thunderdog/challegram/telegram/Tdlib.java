@@ -493,6 +493,7 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
   private final TdlibQuickAckManager quickAckManager;
   private final TdlibSettingsManager settingsManager;
   private final TdlibNotes notesManager;
+  private final TdlibProfileMusic profileMusicManager;
   private final TdlibContactNotes contactNotesManager;
   private final TdlibWallpaperManager wallpaperManager;
   private final TdlibNotificationManager notificationManager;
@@ -639,6 +640,7 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
       ms = SystemClock.uptimeMillis();
     }
     this.notesManager = new TdlibNotes(this);
+    this.profileMusicManager = new TdlibProfileMusic(this);
     this.contactNotesManager = new TdlibContactNotes(this);
     this.settingsManager = new TdlibSettingsManager(this);
     if (needMeasure) {
@@ -2462,6 +2464,10 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
 
   public TdlibSettingsManager settings () {
     return settingsManager;
+  }
+
+  public TdlibProfileMusic profileMusic () {
+    return profileMusicManager;
   }
 
   public TdlibNotes notes () {
@@ -12241,7 +12247,7 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
     if (chatId == 0)
       return false;
     if (ChatId.isUserChat(chatId)) {
-      return /*isSelfChat(chatId) ||*/ isBotChat(chatId);
+      return isSelfChat(chatId) || isBotChat(chatId);
     }
     TdApi.ChatMemberStatus status = chatStatus(chatId);
     if (status != null) {

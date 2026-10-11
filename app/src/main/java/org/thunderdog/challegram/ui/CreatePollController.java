@@ -16,7 +16,22 @@ package org.thunderdog.challegram.ui;
 
 import android.content.Context;
 import android.graphics.Rect;
+import android.graphics.Canvas;
+import android.graphics.drawable.Drawable;
+import android.content.res.Resources;
+import androidx.collection.SparseArrayCompat;
+import org.thunderdog.challegram.component.chat.MediaPreview;
+import org.thunderdog.challegram.loader.ComplexReceiver;
+import org.thunderdog.challegram.util.DrawableProvider;
 import android.text.InputFilter;
+import android.text.Spanned;
+import android.text.style.CharacterStyle;
+import android.view.ActionMode;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.view.Gravity;
+import android.widget.ImageView;
+import android.widget.FrameLayout;
 import android.text.InputType;
 import android.view.View;
 import android.view.ViewGroup;
@@ -25,11 +40,20 @@ import android.view.inputmethod.EditorInfo;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.ItemTouchHelper;
 import androidx.recyclerview.widget.RecyclerView;
 
 import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.component.attach.CustomItemAnimator;
+import org.thunderdog.challegram.component.attach.PollMediaPicker;
+import org.thunderdog.challegram.component.sticker.TGStickerObj;
+import org.thunderdog.challegram.emoji.EmojiSpan;
+import org.thunderdog.challegram.widget.MaterialEditText;
+import org.thunderdog.challegram.widget.EmojiLayout;
+import org.thunderdog.challegram.widget.PopupLayout;
+import org.thunderdog.challegram.util.text.Text;
+import tgx.td.JSON;
 import org.thunderdog.challegram.component.base.SettingView;
 import org.thunderdog.challegram.component.chat.MessagesManager;
 import org.thunderdog.challegram.core.Lang;
@@ -52,6 +76,7 @@ import org.thunderdog.challegram.widget.FillingDecoration;
 import org.thunderdog.challegram.widget.MaterialEditTextGroup;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -117,6 +142,13 @@ public class CreatePollController extends RecyclerViewController<CreatePollContr
     return true;
   }
 
+  private int descriptionMaxLength = 300;
+  private int selectedOpenPeriod;
+  private int selectedCloseDate;
+  private final Map<ListItem, TdApi.InputPollMedia> attachedMedia = new LinkedHashMap<>();
+  private final Map<ListItem, CharSequence> mediaLabels = new LinkedHashMap<>();
+  private final Map<ListItem, MediaPreview> mediaPreviews = new LinkedHashMap<>();
+  private ItemTouchHelper reorderHelper;
   private SettingsAdapter adapter;
   private FillingDecoration decoration;
   private ListItem addItem, itemsListHint;
@@ -124,6 +156,15 @@ public class CreatePollController extends RecyclerViewController<CreatePollContr
 
   @Override
   protected void onCreateView (Context context, CustomRecyclerView recyclerView) {
+    String cachedConfig = tdlib.settings().getApplicationConfig();
+    if (!StringUtils.isEmpty(cachedConfig)) readDescriptionLimit(JSON.parse(cachedConfig));
+    tdlib.send(new TdApi.GetApplicationConfig(), (result, error) -> runOnUiThreadOptional(() -> {
+      if (error == null && readDescriptionLimit(result) && adapter != null) {
+        int index = adapter.indexOfView(descriptionItem);
+        if (index != -1) adapter.notifyItemChanged(index);
+        checkSend();
+      }
+    }));
     adapter = new SettingsAdapter(this) {
       @Override
       protected void modifyEditText (ListItem item, ViewGroup parent, MaterialEditTextGroup editText) {
@@ -135,7 +176,7 @@ public class CreatePollController extends RecyclerViewController<CreatePollContr
           editText.setHint(isExplanation ? R.string.QuizExplanation : R.string.PollDescription);
           editText.getEditText().setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
           Views.setSingleLine(editText.getEditText(), false);
-          editText.setMaxLength(TdConstants.MAX_QUIZ_EXPLANATION_LENGTH);
+          editText.setMaxLength(isExplanation ? TdConstants.MAX_QUIZ_EXPLANATION_LENGTH : descriptionMaxLength);
           editText.setAlwaysActive(true);
           editText.getEditText().setLineDisabled(true);
         } else if (itemId == R.id.title) {
@@ -181,11 +222,14 @@ public class CreatePollController extends RecyclerViewController<CreatePollContr
           });
           editText.getEditText().setImeOptions(EditorInfo.IME_FLAG_NO_EXTRACT_UI | EditorInfo.IME_ACTION_NEXT);
         }
+        if (itemId == R.id.title || itemId == R.id.option || itemId == R.id.text_subtitle || itemId == R.id.text_explanation) {
+          addEditorControls(item, editText);
+        }
       }
 
       @Override
       protected void onEditTextCheckBoxClick (ListItem item, ViewGroup parent, MaterialEditTextGroup editText, CheckBoxView checkBoxVIew) {
-        if (item.getId() == R.id.option) {
+        if (!getDoneButton().isInProgress() && item.getId() == R.id.option) {
           toggleCorrectOptionEnabled(item);
         }
       }
@@ -219,7 +263,9 @@ public class CreatePollController extends RecyclerViewController<CreatePollContr
           view.getToggler().setRadioEnabled(!isQuiz && item.getBoolValue(), isUpdate);
         }
 
-        if (itemId == R.id.btn_pollSetting_showVoters) {
+        if (itemId == R.id.btn_pollSetting_duration) {
+          view.setData(selectedCloseDate != 0 ? Lang.getDate(selectedCloseDate, TimeUnit.SECONDS) : selectedOpenPeriod != 0 ? Strings.buildDuration(selectedOpenPeriod) : Lang.getString(R.string.PollDurationUnlimited));
+        } else if (itemId == R.id.btn_pollSetting_showVoters) {
           view.setData(item.getBoolValue() ? R.string.PollSettingShowVotersOn : R.string.PollSettingShowVotersOff);
         } else if (itemId == R.id.btn_pollSetting_multiAnswers) {
           view.setData(item.getBoolValue() ? R.string.PollSettingMultipleOn : R.string.PollSettingMultipleOff);
@@ -302,12 +348,12 @@ public class CreatePollController extends RecyclerViewController<CreatePollContr
 
     if (settingCount > 0)
       items.add(new ListItem(ListItem.TYPE_SEPARATOR_FULL));
-    items.add(settingRevoting = new ListItem(ListItem.TYPE_VALUED_SETTING_COMPACT_WITH_TOGGLER, R.id.btn_pollSetting_revoting, 0, R.string.PollSettingRevoting).setBoolValue(true));
+    items.add(settingRevoting = new ListItem(ListItem.TYPE_VALUED_SETTING_COMPACT_WITH_TOGGLER, R.id.btn_pollSetting_revoting, 0, R.string.PollSettingRevoting).setBoolValue(!isQuiz));
     settingCount++;
 
     if (settingCount > 0)
       items.add(new ListItem(ListItem.TYPE_SEPARATOR_FULL));
-    items.add(settingQuiz = new ListItem(ListItem.TYPE_VALUED_SETTING_COMPACT_WITH_TOGGLER, R.id.btn_pollSetting_quiz, 0, R.string.PollSettingQuiz));
+    items.add(settingQuiz = new ListItem(ListItem.TYPE_VALUED_SETTING_COMPACT_WITH_TOGGLER, R.id.btn_pollSetting_quiz, 0, R.string.PollSettingQuiz).setBoolValue(isQuiz));
     settingCount++;
 
     if (settingCount > 0)
@@ -315,8 +361,7 @@ public class CreatePollController extends RecyclerViewController<CreatePollContr
     items.add(settingShuffle = new ListItem(ListItem.TYPE_VALUED_SETTING_COMPACT_WITH_TOGGLER, R.id.btn_pollSetting_shuffle, 0, R.string.PollSettingShuffle).setBoolValue(true));
     settingCount++;
 
-    if (false) {
-      // TODO: limit duration
+    {
       if (settingCount > 0)
         items.add(new ListItem(ListItem.TYPE_SEPARATOR_FULL));
       items.add(settingDuration = new ListItem(ListItem.TYPE_VALUED_SETTING_COMPACT_WITH_TOGGLER, R.id.btn_pollSetting_duration, 0, R.string.PollSettingDuration));
@@ -362,6 +407,421 @@ public class CreatePollController extends RecyclerViewController<CreatePollContr
     recyclerView.setAdapter(adapter);
     recyclerView.setItemAnimator(new CustomItemAnimator(AnimatorUtils.DECELERATE_INTERPOLATOR, 180l));
     recyclerView.addItemDecoration(decoration);
+    reorderHelper = new ItemTouchHelper(new ItemTouchHelper.SimpleCallback(ItemTouchHelper.UP | ItemTouchHelper.DOWN, 0) {
+      @Override
+      public boolean isLongPressDragEnabled () { return false; }
+
+      @Override
+      public int getMovementFlags (@NonNull RecyclerView recycler, @NonNull RecyclerView.ViewHolder holder) {
+        return makeMovementFlags(holder.itemView.getTag() instanceof ListItem && options.contains(holder.itemView.getTag()) ? ItemTouchHelper.UP | ItemTouchHelper.DOWN : 0, 0);
+      }
+
+      @Override
+      public boolean onMove (@NonNull RecyclerView recycler, @NonNull RecyclerView.ViewHolder source, @NonNull RecyclerView.ViewHolder target) {
+        if (getDoneButton().isInProgress()) return false;
+        int from = options.indexOf(source.itemView.getTag());
+        int to = options.indexOf(target.itemView.getTag());
+        if (from < 0 || to < 0) return false;
+        int sourcePosition = source.getBindingAdapterPosition();
+        int targetPosition = target.getBindingAdapterPosition();
+        if (sourcePosition < 0 || targetPosition < 0) return false;
+        int direction = from < to ? 1 : -1;
+        for (int index = from; index != to; index += direction) {
+          ListItem moved = options.get(index);
+          ListItem neighbor = options.get(index + direction);
+          int first = adapter.indexOfView(moved);
+          int second = adapter.indexOfView(neighbor);
+          Collections.swap(options, index, index + direction);
+          Collections.swap(adapter.getItems(), first, second);
+          adapter.notifyItemMoved(first, second);
+          adapter.notifyItemMoved(second - direction, first);
+        }
+        return true;
+      }
+
+      @Override
+      public void onSwiped (@NonNull RecyclerView.ViewHolder holder, int direction) { }
+    });
+    reorderHelper.attachToRecyclerView(recyclerView);
+  }
+
+  private static class DraftMediaView extends View implements DrawableProvider {
+    private final ComplexReceiver receiver = new ComplexReceiver(this);
+    private final SparseArrayCompat<Drawable> drawables = new SparseArrayCompat<>();
+    private final MediaPreview preview;
+    private CharSequence label;
+
+    DraftMediaView (Context context, @Nullable MediaPreview preview) {
+      super(context);
+      this.preview = preview;
+      if (preview != null) preview.requestFiles(receiver, false);
+    }
+
+    @Override
+    protected void onAttachedToWindow () {
+      super.onAttachedToWindow();
+      receiver.attach();
+    }
+
+    @Override
+    protected void onDetachedFromWindow () {
+      receiver.detach();
+      super.onDetachedFromWindow();
+    }
+
+    @Override
+    protected void onDraw (Canvas canvas) {
+      super.onDraw(canvas);
+      if (preview != null) preview.draw(this, canvas, receiver, 0, 0, 1f);
+      android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+      paint.setTextSize(Screen.dp(14));
+      paint.setColor(org.thunderdog.challegram.theme.Theme.getColor(ColorId.text));
+      if (label != null) {
+        CharSequence text = android.text.TextUtils.ellipsize(label, new android.text.TextPaint(paint), Math.max(0, getWidth() - Screen.dp(60)), android.text.TextUtils.TruncateAt.END);
+        canvas.drawText(text.toString(), Screen.dp(60), Screen.dp(28), paint);
+      }
+    }
+
+    @Override
+    public SparseArrayCompat<Drawable> getSparseDrawableHolder () { return drawables; }
+
+    @Override
+    public Resources getSparseDrawableResources () { return getResources(); }
+  }
+
+  private boolean readDescriptionLimit (@Nullable TdApi.Object object) {
+    if (!(object instanceof TdApi.JsonValueObject)) return false;
+    for (TdApi.JsonObjectMember member : ((TdApi.JsonValueObject) object).members) {
+      if ("poll_caption_length_max".equals(member.key) && member.value instanceof TdApi.JsonValueNumber) {
+        double value = ((TdApi.JsonValueNumber) member.value).value;
+        if (value > 0 && value <= Integer.MAX_VALUE && descriptionMaxLength != (int) value) {
+          descriptionMaxLength = (int) value;
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private void showDurationPicker () {
+    IntList ids = new IntList(7);
+    ArrayList<String> labels = new ArrayList<>();
+    ids.append(R.id.btn_cancel);
+    labels.add(Lang.getString(R.string.PollDurationUnlimited));
+    for (int hours : new int[] {1, 3, 8, 24, 72}) {
+      int seconds = hours * 3600;
+      if (seconds <= tdlib.options().pollOpenPeriodMax) {
+        ids.append(-seconds);
+        labels.add(Strings.buildDuration(seconds));
+      }
+    }
+    ids.append(R.id.btn_pollDurationCustom);
+    labels.add(Lang.getString(R.string.PollDurationCustom));
+    showOptions(Lang.getString(R.string.PollSettingDuration), ids.get(), labels.toArray(new String[0]), null, null, (view, id) -> {
+      if (id == R.id.btn_pollDurationCustom) {
+        showDateTimePicker(Lang.getString(R.string.PollDurationCustom), R.string.PollClosesTodayAt, R.string.PollClosesTomorrowAt, R.string.PollClosesDateAt, millis -> {
+          long seconds = TimeUnit.MILLISECONDS.toSeconds(millis);
+          long now = tdlib.currentTime(TimeUnit.SECONDS);
+          if (seconds <= now || seconds - now > tdlib.options().pollOpenPeriodMax || seconds > Integer.MAX_VALUE) {
+            showErrorTooltip(getDoneButton(), Lang.getString(R.string.PollDurationInvalid));
+            return;
+          }
+          selectedOpenPeriod = 0;
+          selectedCloseDate = (int) seconds;
+          updateDuration();
+        }, null);
+      } else {
+        selectedOpenPeriod = id < 0 ? -id : 0;
+        selectedCloseDate = 0;
+        updateDuration();
+      }
+      return true;
+    });
+  }
+
+  private void updateDuration () {
+    settingDuration.setBoolValue(selectedOpenPeriod != 0 || selectedCloseDate != 0);
+    adapter.updateValuedSetting(settingDuration);
+    checkSend();
+  }
+
+  private void setPollSending (boolean sending) {
+    getDoneButton().setInProgress(sending);
+    for (int i = 0; i < getRecyclerView().getChildCount(); i++) {
+      View row = getRecyclerView().getChildAt(i);
+      if (row instanceof ViewGroup && ((ViewGroup) row).getChildCount() > 0 && ((ViewGroup) row).getChildAt(0) instanceof MaterialEditTextGroup) {
+        ((MaterialEditTextGroup) ((ViewGroup) row).getChildAt(0)).getEditText().setEnabled(!sending);
+      }
+    }
+  }
+
+  private void addEditorControls (ListItem item, MaterialEditTextGroup group) {
+    boolean hasMedia = item != questionItem;
+    MaterialEditText edit = group.getEditText();
+    edit.setEnabled(!getDoneButton().isInProgress());
+    for (int id : new int[] {R.id.btn_pollMedia, R.id.menu_btn_emoji, R.id.btn_pollReorder, R.id.btn_pollMediaLabel}) {
+      View existing = group.findViewById(id);
+      if (existing instanceof DraftMediaView) {
+        ComplexReceiver receiver = ((DraftMediaView) existing).receiver;
+        removeDestroyListener(receiver);
+        receiver.performDestroy();
+      }
+      if (existing != null) group.removeView(existing);
+    }
+    int controlsWidth = Screen.dp(item.getId() == R.id.option ? 108 : hasMedia ? 72 : 36);
+    FrameLayout.LayoutParams textParams = (FrameLayout.LayoutParams) edit.getLayoutParams();
+    textParams.rightMargin = controlsWidth;
+    edit.setLayoutParams(textParams);
+    ImageView emoji = editorButton(group, R.id.menu_btn_emoji, R.drawable.baseline_emoticon_outline_24, 0);
+    emoji.setContentDescription(Lang.getString(R.string.AnimatedEmoji));
+    emoji.setOnClickListener(view -> showEmojiPicker(edit));
+    if (hasMedia) {
+      ImageView media = editorButton(group, R.id.btn_pollMedia, R.drawable.deproko_baseline_attach_26, 36);
+      media.setAlpha(attachedMedia.containsKey(item) ? 1f : .55f);
+      media.setContentDescription(mediaLabels.containsKey(item) ? mediaLabels.get(item) : Lang.getString(R.string.PollMediaAttach));
+      media.setOnClickListener(view -> {
+        if (getDoneButton().isInProgress()) return;
+        if (attachedMedia.containsKey(item)) {
+          showOptions(mediaLabels.get(item), new int[] {R.id.btn_edit, R.id.btn_delete},
+            new String[] {Lang.getString(R.string.PollMediaReplace), Lang.getString(R.string.PollMediaRemove)}, null, null, (option, id) -> {
+              if (id == R.id.btn_delete) setAttachedMedia(item, null, null);
+              else pickMedia(item);
+              return true;
+            });
+        } else {
+          pickMedia(item);
+        }
+      });
+    }
+    if (item.getId() == R.id.option) {
+      ImageView drag = editorButton(group, R.id.btn_pollReorder, R.drawable.dotvhs_baseline_folders_reorder_24, 72);
+      drag.setContentDescription(Lang.getString(R.string.PollReorderOption));
+      drag.setOnTouchListener((view, event) -> {
+        if (event.getActionMasked() == android.view.MotionEvent.ACTION_DOWN && reorderHelper != null && !getDoneButton().isInProgress()) {
+          View row = (View) group.getParent();
+          RecyclerView.ViewHolder holder = getRecyclerView().findContainingViewHolder(row);
+          if (holder != null) reorderHelper.startDrag(holder);
+          return true;
+        }
+        return false;
+      });
+    }
+    group.setPadding(group.getPaddingLeft(), group.getPaddingTop(), group.getPaddingRight(), attachedMedia.containsKey(item) ? Screen.dp(56) : 0);
+    if (attachedMedia.containsKey(item)) {
+      DraftMediaView preview = new DraftMediaView(context, mediaPreviews.get(item));
+      addDestroyListener(preview.receiver);
+      preview.setId(R.id.btn_pollMediaLabel);
+      preview.setContentDescription(mediaLabels.get(item));
+      FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Screen.dp(48), Gravity.BOTTOM);
+      params.bottomMargin = -Screen.dp(52);
+      group.addView(preview, params);
+      preview.setOnClickListener(view -> {
+        View button = group.findViewById(R.id.btn_pollMedia);
+        if (button != null) button.performClick();
+      });
+      preview.label = mediaLabels.get(item);
+    }
+    if (item == descriptionItem || item == explanationItem) installFormatting(edit, item);
+  }
+
+  private ImageView editorButton (MaterialEditTextGroup group, int id, int icon, int margin) {
+    ImageView view = new ImageView(context);
+    view.setId(id);
+    view.setImageResource(icon);
+    view.setColorFilter(org.thunderdog.challegram.theme.Theme.getColor(ColorId.icon));
+    view.setScaleType(ImageView.ScaleType.CENTER);
+    FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(Screen.dp(36), Screen.dp(40), Gravity.RIGHT | Gravity.TOP);
+    params.topMargin = Screen.dp(20);
+    params.rightMargin = Screen.dp(margin);
+    group.addView(view, params);
+    return view;
+  }
+
+  private void pickMedia (ListItem item) {
+    hideSoftwareKeyboard();
+    PollMediaPicker.show(this, getArgumentsStrict().chatId, item.getId() == R.id.option, new PollMediaPicker.Callback() {
+      @Override
+      public void onMediaSelected (TdApi.InputPollMedia media, CharSequence label) {
+        onMediaSelected(media, label, null);
+      }
+
+      @Override
+      public void onMediaSelected (TdApi.InputPollMedia media, CharSequence label, @Nullable MediaPreview preview) {
+        if (!isDestroyed() && !getDoneButton().isInProgress() && (options.contains(item) || item == descriptionItem || item == explanationItem)) {
+          if (preview != null) mediaPreviews.put(item, preview);
+          else mediaPreviews.remove(item);
+          setAttachedMedia(item, media, label);
+        }
+      }
+    });
+  }
+
+  private void setAttachedMedia (ListItem item, @Nullable TdApi.InputPollMedia media, @Nullable CharSequence label) {
+    if (media == null) {
+      attachedMedia.remove(item);
+      mediaLabels.remove(item);
+      mediaPreviews.remove(item);
+    } else {
+      attachedMedia.put(item, media);
+      mediaLabels.put(item, label);
+    }
+    int index = adapter.indexOfView(item);
+    if (index != -1) adapter.notifyItemChanged(index);
+    checkSend();
+  }
+
+  private void showEmojiPicker (MaterialEditText edit) {
+    if (getDoneButton().isInProgress()) return;
+    hideSoftwareKeyboard();
+    showPopup(Lang.getString(R.string.AnimatedEmoji), true, Text.LINE_COUNT_UNLIMITED, (popup, wrap) -> {
+      EmojiLayout emoji = new EmojiLayout(context);
+      emoji.initWithMediasEnabled(this, false, new EmojiLayout.Listener() {
+        @Override
+        public long getOutputChatId () { return getArgumentsStrict().chatId; }
+
+        @Override
+        public void onEnterEmoji (String value) {
+          if (isDestroyed() || getDoneButton().isInProgress()) return;
+          edit.paste(new TdApi.FormattedText(value, null), false);
+        }
+
+        @Override
+        public void onEnterCustomEmoji (TGStickerObj sticker) {
+          if (isDestroyed() || getDoneButton().isInProgress()) return;
+          if (!tdlib.hasPremium()) {
+            tdlib.ui().showPremiumAlert(CreatePollController.this, edit, TdlibUi.PremiumFeature.CUSTOM_EMOJI);
+            return;
+          }
+          TdApi.Sticker data = sticker.getSticker();
+          if (data != null && !StringUtils.isEmpty(data.emoji)) {
+            edit.paste(new TdApi.FormattedText(data.emoji, new TdApi.TextEntity[] {
+              new TdApi.TextEntity(0, data.emoji.length(), new TdApi.TextEntityTypeCustomEmoji(sticker.getCustomEmojiId()))
+            }), false);
+          }
+        }
+
+        @Override
+        public boolean isEmojiInputEmpty () { return edit.length() == 0; }
+
+        @Override
+        public void onDeleteEmoji () {
+          edit.dispatchKeyEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DEL));
+        }
+      }, this, false);
+      emoji.setForceHeight(Screen.dp(320));
+      wrap.addView(emoji);
+      me.vkryl.core.lambda.Destroyable dismiss = () -> popup.hideWindow(false);
+      addDestroyListener(dismiss);
+      popup.setDismissListener(new PopupLayout.DismissListener() {
+        @Override
+        public void onPopupDismissPrepare (PopupLayout layout) { }
+        @Override
+        public void onPopupDismiss (PopupLayout layout) {
+          if (!isDestroyed()) removeDestroyListener(dismiss);
+          emoji.destroy();
+        }
+      });
+      return Screen.dp(320);
+    }, null);
+  }
+
+  private void installFormatting (MaterialEditText edit, ListItem item) {
+    edit.setCustomSelectionActionModeCallback(new ActionMode.Callback() {
+      @Override
+      public boolean onCreateActionMode (ActionMode mode, Menu menu) {
+        mode.getMenuInflater().inflate(R.menu.text, menu);
+        return true;
+      }
+
+      @Override
+      public boolean onPrepareActionMode (ActionMode mode, Menu menu) { return false; }
+
+      @Override
+      public boolean onActionItemClicked (ActionMode mode, MenuItem menuItem) {
+        int id = menuItem.getItemId();
+        TdApi.TextEntityType type;
+        if (id == R.id.btn_bold) type = new TdApi.TextEntityTypeBold();
+        else if (id == R.id.btn_italic) type = new TdApi.TextEntityTypeItalic();
+        else if (id == R.id.btn_underline) type = new TdApi.TextEntityTypeUnderline();
+        else if (id == R.id.btn_strikethrough) type = new TdApi.TextEntityTypeStrikethrough();
+        else if (id == R.id.btn_spoiler) type = new TdApi.TextEntityTypeSpoiler();
+        else if (id == R.id.btn_monospace) type = new TdApi.TextEntityTypeCode();
+        else if (id == R.id.btn_quote) type = new TdApi.TextEntityTypeBlockQuote();
+        else if (id == R.id.btn_plain) type = null;
+        else if (id == R.id.btn_link) {
+          int start = Math.min(edit.getSelectionStart(), edit.getSelectionEnd());
+          int end = Math.max(edit.getSelectionStart(), edit.getSelectionEnd());
+          android.widget.EditText input = new android.widget.EditText(context);
+          input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+          new android.app.AlertDialog.Builder(context).setTitle(Lang.getString(R.string.TextFormatLink)).setView(input)
+            .setPositiveButton(Lang.getString(R.string.Done), (dialog, which) -> {
+              String url = input.getText().toString().trim();
+              if (!url.isEmpty() && start >= 0 && end <= edit.length()) {
+                applyFormatting(edit, item, start, end, new TdApi.TextEntityTypeTextUrl(url));
+              }
+            }).setNegativeButton(Lang.getString(R.string.Cancel), null).show();
+          return true;
+        } else return false;
+        applyFormatting(edit, item, Math.min(edit.getSelectionStart(), edit.getSelectionEnd()), Math.max(edit.getSelectionStart(), edit.getSelectionEnd()), type);
+        return true;
+      }
+
+      @Override
+      public void onDestroyActionMode (ActionMode mode) { }
+    });
+  }
+
+  private void applyFormatting (MaterialEditText edit, ListItem item, int start, int end, @Nullable TdApi.TextEntityType type) {
+    if (isDestroyed() || start < 0 || end <= start || getDoneButton().isInProgress()) return;
+    if (type == null) {
+      for (CharacterStyle span : edit.getText().getSpans(start, end, CharacterStyle.class)) {
+        if (!(span instanceof EmojiSpan)) edit.getText().removeSpan(span);
+      }
+    } else {
+      Object span = TD.toSpan(type, TD.TextEntityOption.ALLOW_INTERNAL);
+      if (span != null) edit.getText().setSpan(span, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+    }
+    item.setStringValue(org.thunderdog.challegram.v.EditText.nonModifiableCopy(edit.getText()));
+    edit.invalidate();
+    checkSend();
+  }
+
+  @Nullable
+  private CharSequence splitPastedOptions (ListItem item, CharSequence source, int start, int end, Spanned dest, int dstart, int dend) {
+    String pasted = source.subSequence(start, end).toString();
+    if (pasted.indexOf('\n') == -1 && pasted.indexOf('\r') == -1) return null;
+    ArrayList<CharSequence> lines = new ArrayList<>();
+    for (int[] range : PollDraftRules.splitLines(source, start, end)) {
+      lines.add(source.subSequence(range[0], range[1]));
+    }
+    if (lines.isEmpty()) return "";
+    if (lines.size() > tdlib.options().pollAnswerCountMax - options.size() + 1) {
+      tdlib.ui().post(() -> showErrorTooltip(getDoneButton(), Lang.getString(R.string.PollOptionsMax)));
+      return dest.subSequence(dstart, dend);
+    }
+    if (lines.size() > 1) {
+      tdlib.ui().post(() -> {
+        int optionIndex = options.indexOf(item);
+        if (optionIndex == -1 || isDestroyed() || getDoneButton().isInProgress()) return;
+        for (int i = 1; i < lines.size(); i++) {
+          int addPosition = adapter.indexOfView(addItem);
+          if (addPosition == -1) break;
+          ListItem next = createNewOption().setStringValue(lines.get(i));
+          options.remove(next);
+          options.add(optionIndex + i, next);
+          int insertPosition = adapter.indexOfView(options.get(optionIndex + i - 1)) + 1;
+          if (options.size() == tdlib.options().pollAnswerCountMax) {
+            adapter.removeRange(addPosition - 1, 2);
+          } else {
+            decoration.lastRange()[1] += 2;
+          }
+          adapter.addItems(insertPosition, new ListItem(ListItem.TYPE_SEPARATOR_FULL), next);
+        }
+        updateLimit();
+        checkSend();
+      });
+    }
+    return lines.get(0);
   }
 
   private HapticMenuHelper currentMenu;
@@ -459,9 +919,14 @@ public class CreatePollController extends RecyclerViewController<CreatePollContr
 
   @Override
   public void onClick (View v) {
+    if (getDoneButton().isInProgress()) return;
     int itemId = v.getId();
     ListItem item = (ListItem) v.getTag();
 
+    if (itemId == R.id.btn_pollSetting_duration) {
+      showDurationPicker();
+      return;
+    }
     if (itemId == R.id.optionAdd) {
       addOption();
     } else if (itemId == R.id.btn_pollSetting_countries) {
@@ -499,14 +964,6 @@ public class CreatePollController extends RecyclerViewController<CreatePollContr
       (itemId == R.id.btn_pollSetting_quiz && canChangePollType()) ||
       (itemId == R.id.btn_pollSetting_additions && !isQuiz)
     ) {
-      if (!item.getBoolValue() && itemId == R.id.btn_pollSetting_duration) {
-        long maxCloseDate = tdlib.currentTime(TimeUnit.SECONDS) + tdlib.options().pollOpenPeriodMax;
-
-        // TODO Open up duration picker
-
-        return;
-      }
-
       boolean value = adapter.toggleView(v);
 
       item.setBoolValue(value);
@@ -588,7 +1045,7 @@ public class CreatePollController extends RecyclerViewController<CreatePollContr
         }
 
         descHintIndex = adapter.indexOfView(descriptionItem);
-        if (descHintIndex != -1 && descriptionItem.setStringIfChanged(isQuiz ? R.string.QuizExplanation : R.string.PollDescription)) {
+        if (descHintIndex != -1 && descriptionItem.setStringIfChanged(R.string.PollDescription)) {
           adapter.updateValuedSetting(descriptionItem);
         }
 
@@ -628,7 +1085,7 @@ public class CreatePollController extends RecyclerViewController<CreatePollContr
 
   private boolean addOption () {
     final int maxPollOptionCount = tdlib.options().pollAnswerCountMax;
-    if (options.size() >= maxPollOptionCount || isAdding)
+    if (getDoneButton().isInProgress() || options.size() >= maxPollOptionCount || isAdding)
       return false;
     int i = adapter.indexOfViewById(R.id.optionAdd);
     isAdding = true;
@@ -655,11 +1112,15 @@ public class CreatePollController extends RecyclerViewController<CreatePollContr
   }
 
   private void removeOption (ListItem option) {
+    if (getDoneButton().isInProgress()) return;
     final int i = options.indexOf(option);
     if (i == -1)
       return;
     setCorrectOptionEnabled(option, false);
     options.remove(i);
+    attachedMedia.remove(option);
+    mediaLabels.remove(option);
+    mediaPreviews.remove(option);
     boolean hideKeyboard = true;
     if (!options.isEmpty()) {
       int nextIndex = adapter.indexOfView(options.get(i > 0 ? i - 1 : 0));
@@ -690,6 +1151,7 @@ public class CreatePollController extends RecyclerViewController<CreatePollContr
       hideSoftwareKeyboard();
     }
     updateLimit();
+    checkSend();
   }
 
   @Override
@@ -707,7 +1169,9 @@ public class CreatePollController extends RecyclerViewController<CreatePollContr
   private final List<ListItem> options = new ArrayList<>();
 
   private ListItem createNewOption () {
-    ListItem option = new ListItem(ListItem.TYPE_EDITTEXT_POLL_OPTION, R.id.option).setInputFilters(new InputFilter[] {
+    ListItem option = new ListItem(ListItem.TYPE_EDITTEXT_POLL_OPTION, R.id.option);
+    option.setInputFilters(new InputFilter[] {
+      (source, start, end, dest, dstart, dend) -> splitPastedOptions(option, source, start, end, dest, dstart, dend),
       new CodePointCountFilter(TdConstants.MAX_POLL_OPTION_LENGTH),
       new CharacterStyleFilter(),
       new RestrictFilter(new char[] {'\n'})
@@ -724,7 +1188,7 @@ public class CreatePollController extends RecyclerViewController<CreatePollContr
       return false;
     if (isQuiz) {
       TdApi.FormattedText formattedText = getExplanation(false);
-      if (formattedText != null && (Td.parseMarkdown(formattedText) ? formattedText.text.length() : formattedText.text.trim().length()) > TdConstants.MAX_QUIZ_EXPLANATION_LENGTH)
+      if (formattedText != null && Td.codePointCount(formattedText) > TdConstants.MAX_QUIZ_EXPLANATION_LENGTH)
         return false;
     }
     int count = 0;
@@ -737,8 +1201,10 @@ public class CreatePollController extends RecyclerViewController<CreatePollContr
         count++;
       }
     }
+    TdApi.FormattedText description = getDescription(false);
+    if (description != null && Td.codePointCount(description) > descriptionMaxLength) return false;
     boolean multiAnswers = isMultiAnswers();
-    return count > 1 && !isQuiz || (correctOptionCount == 1) || (correctOptionCount > 1 && multiAnswers);
+    return PollDraftRules.validAnswers(count, correctOptionCount, isQuiz, multiAnswers);
   }
 
   private boolean isMultiAnswers () {
@@ -749,7 +1215,9 @@ public class CreatePollController extends RecyclerViewController<CreatePollContr
     CharSequence title = StringUtils.trim(questionItem.getCharSequenceValue());
     if (!StringUtils.isEmpty(title))
       return true;
-    if (isQuiz && !Td.isEmpty(getExplanation(false)))
+    if (!attachedMedia.isEmpty() || selectedOpenPeriod != 0 || selectedCloseDate != 0 || !Td.isEmpty(getDescription(false)))
+      return true;
+    if (!Td.isEmpty(getFormattedText(explanationItem, false)))
       return true;
     for (ListItem optionItem : options) {
       if (!StringUtils.isEmptyOrBlank(optionItem.getCharSequenceValue())) {
@@ -810,7 +1278,7 @@ public class CreatePollController extends RecyclerViewController<CreatePollContr
   }
 
   private void send (TdApi.MessageSendOptions sendOptions, boolean disableMarkdown) {
-    if (getDoneButton().isInProgress())
+    if (getDoneButton().isInProgress() || !canSendPoll())
       return;
     TdApi.FormattedText question = TD.toFormattedText(StringUtils.trim(questionItem.getCharSequenceValue()), false);
     if (Td.isEmpty(question) || Td.codePointCount(question) > TdConstants.MAX_POLL_QUESTION_LENGTH) {
@@ -838,11 +1306,23 @@ public class CreatePollController extends RecyclerViewController<CreatePollContr
         int correctOptionId = options.size();
         correctOptionIds.append(correctOptionId);
       }
-      options.add(new TdApi.InputPollOption(option, null));
+      options.add(new TdApi.InputPollOption(option, attachedMedia.get(optionItem)));
     }
     if (options.size() < 2)
       return;
 
+    TdApi.FormattedText description = getDescription(!disableMarkdown);
+    TdApi.FormattedText explanation = getExplanation(!disableMarkdown);
+    if (description != null && Td.codePointCount(description) > descriptionMaxLength) {
+      requestFocus(descriptionItem);
+      return;
+    }
+    if (explanation != null && Td.codePointCount(explanation) > TdConstants.MAX_QUIZ_EXPLANATION_LENGTH) {
+      requestFocus(explanationItem);
+      return;
+    }
+    hasCustomEmoji |= description != null && TD.hasCustomEmoji(description) || explanation != null && TD.hasCustomEmoji(explanation);
+    if (isQuiz && (correctOptionIds.size() == 0 || !isMultiAnswers() && correctOptionIds.size() != 1)) return;
     if (hasCustomEmoji && !tdlib.hasPremium()) {
       tdlib.ui().showPremiumAlert(this, getDoneButton(), TdlibUi.PremiumFeature.CUSTOM_EMOJI);
       return;
@@ -863,27 +1343,30 @@ public class CreatePollController extends RecyclerViewController<CreatePollContr
       return;
     }
 
-    TdApi.FormattedText description = getDescription(!disableMarkdown);
+    int openPeriod = selectedOpenPeriod;
+    int closeDate = selectedCloseDate;
+    long now = tdlib.currentTime(TimeUnit.SECONDS);
+    long sendDate = sendOptions.schedulingState instanceof TdApi.MessageSchedulingStateSendAtDate ?
+      ((TdApi.MessageSchedulingStateSendAtDate) sendOptions.schedulingState).sendDate : now;
+    if (!PollDraftRules.validDuration(openPeriod, closeDate, now, sendDate,
+        sendOptions.schedulingState instanceof TdApi.MessageSchedulingStateSendWhenOnline,
+        tdlib.options().pollOpenPeriodMax)) {
+      showErrorTooltip(getDoneButton(), Lang.getString(R.string.PollDurationInvalid));
+      return;
+    }
 
-    // @param openPeriod Amount of time the poll will be active after creation, in seconds; 0-getOption(&quot;poll_open_period_max&quot;); pass 0 if not specified.
-    // @param closeDate Point in time (Unix timestamp) when the poll will automatically be closed; must be 0-getOption(&quot;poll_open_period_max&quot;) seconds in the future; pass 0 if not specified.
-    // The list of two-letter ISO 3166-1 alpha-2 codes of countries, users from which will be able to vote; for channel chats only. If empty, then all users can participate in the poll. There can be up to getOption(&quot;poll_country_count_max&quot;) chosen countries.
-    int openPeriod = 0;
-    int closeDate = 0;
-
-    // TODO lock texts
-    getDoneButton().setInProgress(true);
+    setPollSending(true);
     hideSoftwareKeyboard();
 
     TdApi.InputPollOption[] optionsArray = options.toArray(new TdApi.InputPollOption[0]);
     TdApi.InputPollType inputPollType = isQuiz ?
-      new TdApi.InputPollTypeQuiz(correctOptionIds.get(), getExplanation(!disableMarkdown), null) :
+      new TdApi.InputPollTypeQuiz(correctOptionIds.get(), explanation, attachedMedia.get(explanationItem)) :
       new TdApi.InputPollTypeRegular(settingAdditions != null && settingAdditions.getBoolValue());
     TdApi.InputMessagePoll poll = new TdApi.InputMessagePoll(
       question,
       optionsArray,
       description,
-      null,
+      attachedMedia.get(descriptionItem),
       settingShowVoters == null || !settingShowVoters.getBoolValue(),
       isMultiAnswers(),
       settingRevoting != null && settingRevoting.getBoolValue(),
@@ -898,7 +1381,7 @@ public class CreatePollController extends RecyclerViewController<CreatePollContr
     );
 
     RunnableData<TdApi.Message> after = message -> runOnUiThreadOptional(() -> {
-      getDoneButton().setInProgress(false);
+      setPollSending(false);
       if (message != null) {
         if (sendOptions.schedulingState != null && !args.callback.areScheduledOnly(this)) {
           NavigationStack stack = navigationStack();

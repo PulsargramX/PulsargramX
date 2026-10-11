@@ -100,6 +100,7 @@ import org.thunderdog.challegram.mediaview.crop.CropTargetView;
 import org.thunderdog.challegram.mediaview.data.FiltersState;
 import org.thunderdog.challegram.mediaview.data.MediaItem;
 import org.thunderdog.challegram.mediaview.data.MediaStack;
+import org.thunderdog.challegram.mediaview.data.PollMediaGallery;
 import org.thunderdog.challegram.mediaview.gl.EGLEditorView;
 import org.thunderdog.challegram.mediaview.paint.PaintMode;
 import org.thunderdog.challegram.mediaview.paint.PaintState;
@@ -2517,6 +2518,11 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       if (index != -1) {
         MediaItem oldItem = stack.get(index);
         TdApi.Message message = oldItem.getMessage();
+        if (message.content instanceof TdApi.MessagePoll && newContent instanceof TdApi.MessagePoll) {
+          // Votes update the poll content, not the individual image in the viewer.
+          message.content = newContent;
+          return;
+        }
         message.content = newContent;
         MediaItem newItem = MediaItem.valueOf(context(), tdlib, message);
         if (newItem != null) {
@@ -2538,6 +2544,14 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   @Override
   public void onMessagesDeleted (long chatId, long[] messageIds) {
     runOnUiThreadOptional(() -> {
+      MediaItem current = stack.getCurrent();
+      if (current != null && current.getMessage() != null &&
+          current.getMessage().content instanceof TdApi.MessagePoll &&
+          current.getSourceChatId() == chatId &&
+          ArrayUtils.indexOf(messageIds, current.getSourceMessageId()) != -1) {
+        forceClose();
+        return;
+      }
       List<MediaItem> items = stack.getAll();
       int remainingCount = messageIds.length;
       for (int index = items.size() - 1; index >= 0 && remainingCount > 0; index--) {
@@ -8490,6 +8504,18 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     }
 
     openWithArgs(context, args);
+  }
+
+  public static boolean openFromPoll (ViewController<?> context, TdApi.Message message,
+                                     @Nullable TGMessage source, int mediaIndex) {
+    if (context.isStackLocked()) return false;
+    MediaStack stack = PollMediaGallery.createStack(context, message, source, mediaIndex);
+    if (stack == null) return false;
+    Args args = new Args(context, MODE_SIMPLE, stack);
+    args.noLoadMore = true;
+    args.forceThumbs = true;
+    openWithArgs(context, args);
+    return true;
   }
 
   public static void openFromMessage (TGMessage message, MediaItem item) {

@@ -29,11 +29,13 @@ import android.graphics.drawable.Drawable;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
+import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -47,6 +49,7 @@ import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.component.attach.CustomItemAnimator;
 import org.thunderdog.challegram.component.chat.MediaPreview;
 import org.thunderdog.challegram.component.user.RemoveHelper;
+import org.thunderdog.challegram.config.ClientPolicy;
 import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.data.InlineResult;
 import org.thunderdog.challegram.data.InlineResultCommon;
@@ -62,9 +65,11 @@ import org.thunderdog.challegram.navigation.MoreDelegate;
 import org.thunderdog.challegram.navigation.NavigationController;
 import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.player.TGPlayerController;
+import org.thunderdog.challegram.support.RippleSupport;
 import org.thunderdog.challegram.support.ViewSupport;
 import org.thunderdog.challegram.telegram.TGLegacyManager;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.telegram.TdlibProfileMusic;
 import org.thunderdog.challegram.telegram.TdlibFilesManager;
 import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
@@ -85,6 +90,7 @@ import org.thunderdog.challegram.widget.SparseDrawableView;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 
 import me.vkryl.android.AnimatorUtils;
@@ -99,14 +105,17 @@ import me.vkryl.core.MathUtils;
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.collection.IntList;
 
-public class PlaybackController extends ViewController<Void> implements Menu, MoreDelegate, View.OnClickListener, TGPlayerController.TrackListChangeListener, TGPlayerController.TrackListener, TdlibFilesManager.FileListener, TGPlayerController.PlayListBuilder, TGLegacyManager.EmojiLoadListener {
+public class PlaybackController extends ViewController<Void> implements Menu, MoreDelegate, View.OnClickListener, TGPlayerController.TrackListChangeListener, TGPlayerController.TrackListener, TdlibFilesManager.FileListener, TGPlayerController.PlayListBuilder, TGLegacyManager.EmojiLoadListener, TdlibProfileMusic.Listener {
   public PlaybackController (Context context, Tdlib tdlib) {
     super(context, tdlib);
   }
 
   @Override
   public CharSequence getName () {
-    return "";
+    long userId = tdlib.context().player().getProfileMusicUserId(tdlib);
+    if (userId == 0) return "";
+    return tdlib.isSelfUserId(userId) ? Lang.getString(R.string.ProfileMusicPlaylist) :
+      Lang.getString(R.string.ProfileMusicPlaylistOther, tdlib.cache().userName(userId));
   }
 
   @Override
@@ -196,6 +205,14 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
 
   private ImageView shuffleButton, repeatButton, nextButton, prevButton;
   private PlayPauseButton playPauseButton;
+  private TextView profileSaveButton;
+  private RecyclerView profileSearchView;
+  private SettingsAdapter profileSearchAdapter;
+  private ArrayList<TdApi.Message> profileSearchTracks;
+  private String profileSearchQuery = "";
+  private long profileSearchUserId;
+  private int profileSearchGeneration;
+  private TGPlayerController.PlayListBuilder profileSearchBuilder;
 
   @Override
   public boolean supportsBottomInset () {
@@ -206,6 +223,7 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
   protected void onBottomInsetChanged (int extraBottomInset, int extraBottomInsetWithoutIme, boolean isImeInset) {
     super.onBottomInsetChanged(extraBottomInset, extraBottomInsetWithoutIme, isImeInset);
     Views.applyBottomInset(recyclerView, extraBottomInset);
+    if (profileSearchView != null) Views.applyBottomInset(profileSearchView, extraBottomInset);
   }
 
   private ImageView newButton (int id, int image, boolean isActive) {
@@ -252,9 +270,12 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
 
     final ItemTouchHelper[] helper = new ItemTouchHelper[1];
     helper[0] = new ItemTouchHelper(new ItemTouchHelper.Callback() {
+      private TdApi.Message draggedTrack;
+
       @Override
       public int getMovementFlags (RecyclerView recyclerView, RecyclerView.ViewHolder viewHolder) {
-        if (isTrackListLess()) {
+        if (isTrackListLess() || (tdlib.context().player().getProfileMusicUserId(tdlib) != 0 &&
+            !tdlib.isSelfUserId(tdlib.context().player().getProfileMusicUserId(tdlib)))) {
           return 0;
         }
         int position = viewHolder.getBindingAdapterPosition();
@@ -312,11 +333,31 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
             fromPosition = trackCount - fromPosition - 1;
             toPosition = trackCount - toPosition - 1;
           }
+          draggedTrack = ((InlineResultCommon) tracks.get(
+            viewHolder.getBindingAdapterPosition()).getData()).getMessage();
           moveTrack(fromPosition, toPosition, true);
           return true;
         }
 
         return false;
+      }
+
+      @Override
+      public void clearView (RecyclerView recycler, RecyclerView.ViewHolder holder) {
+        super.clearView(recycler, holder);
+        TdApi.Message moved = draggedTrack;
+        draggedTrack = null;
+        if (moved != null && tdlib.isSelfUserId(
+            tdlib.context().player().getProfileMusicUserId(tdlib))) {
+          List<TdApi.Message> playlist = tdlib.context().player().getTrackList();
+          for (int i = 0; playlist != null && i < playlist.size(); i++) {
+            if (TGPlayerController.compareTracks(playlist.get(i), moved)) {
+              tdlib.profileMusic().move(TD.getFileId(moved),
+                i > 0 ? TD.getFileId(playlist.get(i - 1)) : 0, null);
+              break;
+            }
+          }
+        }
       }
 
       @Override
@@ -367,6 +408,22 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
     frameLayout.addView(prevButton);
     frameLayout.addView(nextButton);
     frameLayout.addView(playPauseButton);
+    profileSaveButton = new TextView(context);
+    profileSaveButton.setId(R.id.btn_profileAudio);
+    profileSaveButton.setGravity(Gravity.CENTER);
+    profileSaveButton.setTextSize(14f);
+    profileSaveButton.setTextColor(Theme.getColor(ColorId.playerButtonActive));
+    RippleSupport.setSimpleWhiteBackground(profileSaveButton, this);
+    profileSaveButton.setLayoutParams(FrameLayoutFix.newParams(
+      ViewGroup.LayoutParams.MATCH_PARENT, Screen.dp(44f)));
+    profileSaveButton.setOnClickListener(this);
+    profileSaveButton.setOnLongClickListener(v -> {
+      if (currentItem != null) tdlib.profileMusic().showSaveOptions(this, currentItem.getMessage());
+      return true;
+    });
+    addThemeTextColorListener(profileSaveButton, ColorId.playerButtonActive);
+    frameLayout.addView(profileSaveButton);
+    tdlib.profileMusic().addListener(this);
 
     tdlib.context().player().addTrackListChangeListener(this, false);
     setItem((InlineResultCommon) tracks.get(preparedTrackIndex + 1).getData(), true);
@@ -384,9 +441,12 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
   public void destroy () {
     super.destroy();
     tdlib.context().player().removeTrackListChangeListener(this);
+    tdlib.profileMusic().removeListener(this);
     TGLegacyManager.instance().removeEmojiListener(this);
     TGLegacyManager.instance().removeEmojiListener(adapter);
     Views.destroyRecyclerView(recyclerView);
+    if (profileSearchView != null) Views.destroyRecyclerView(profileSearchView);
+    if (profileSearchAdapter != null) TGLegacyManager.instance().removeEmojiListener(profileSearchAdapter);
     coverView.setItem(null);
   }
 
@@ -698,6 +758,7 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
       }
     }
     this.currentItem = item;
+    updateProfileSaveButton();
     coverView.setItem(item);
     float prefixProgress = 0f;
     float progress = 0f;
@@ -807,6 +868,10 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
 
     setItem((InlineResultCommon) tracks.get(preparedTrackIndex + 1).getData(), true);
     onTrackListSizeChanged();
+    if (inSearchMode() && profileSearchUserId !=
+        this.tdlib.context().player().getProfileMusicUserId(this.tdlib)) {
+      closeSearchMode(null);
+    }
   }
 
   private void setActive (ImageView imageView, boolean isActive) {
@@ -931,6 +996,11 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
 
   @Override
   public void onTrackListClose (Tdlib tdlib, long playListChatId, long playListMaxMessageId, long playListMinMessageId, boolean newEndReached, boolean oldEndReached, List<TdApi.Message> removedMessages) {
+    if (currentItem != null && currentItem.getMessage() instanceof TdlibProfileMusic.Message) {
+      if (isFocused()) navigateBack();
+      else context.navigation().getStack().destroy(this);
+      return;
+    }
     playPauseButton.setIsPlaying(false, true);
     if (currentItem != null) {
       currentItem.setIsTrackCurrent(false);
@@ -942,9 +1012,22 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
 
   private void removeTrack (final InlineResultCommon common) {
     if (currentItem != null) {
-      showOptions(Lang.getStringBold(R.string.PlayListRemoveTrack, common.getTrackTitle() + " – " + common.getTrackSubtitle()), new int[]{R.id.btn_delete, R.id.btn_cancel}, new String[]{Lang.getString(R.string.PlayListRemove), Lang.getString(R.string.Cancel)}, new int[] {OptionColor.RED, OptionColor.NORMAL}, new int[] {R.drawable.baseline_remove_circle_24, R.drawable.baseline_cancel_24}, (itemView, id) -> {
+      showOptions(Lang.getStringBold(R.string.PlayListRemoveTrack, common.getTrackTitle() + " – " + common.getTrackSubtitle()), new int[]{R.id.btn_delete, R.id.btn_cancel}, new String[]{Lang.getString(tdlib.isSelfUserId(TdlibProfileMusic.userId(common.getMessage())) ? R.string.AudioRemoveFromProfile : R.string.PlayListRemove), Lang.getString(R.string.Cancel)}, new int[] {OptionColor.RED, OptionColor.NORMAL}, new int[] {R.drawable.baseline_remove_circle_24, R.drawable.baseline_cancel_24}, (itemView, id) -> {
         if (id == R.id.btn_delete) {
-          tdlib.context().player().removeTrack(common.getMessage(), true);
+          if (tdlib.isSelfUserId(TdlibProfileMusic.userId(common.getMessage()))) {
+            List<TdApi.Message> playlist = tdlib.context().player().getTrackList();
+            int afterFileId = 0;
+            for (int i = 1; playlist != null && i < playlist.size(); i++) {
+              if (TGPlayerController.compareTracks(playlist.get(i), common.getMessage())) {
+                afterFileId = TD.getFileId(playlist.get(i - 1));
+                break;
+              }
+            }
+            tdlib.profileMusic().remove(this,
+              ((TdApi.MessageAudio) common.getMessage().content).audio, afterFileId);
+          } else {
+            tdlib.context().player().removeTrack(common.getMessage(), true);
+          }
         }
         return true;
       });
@@ -1078,7 +1161,18 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
   @Override
   public void onClick (View v) {
     final int viewId = v.getId();
-    if (viewId == R.id.btn_custom) {
+    if (viewId == R.id.btn_profileAudio && currentItem != null) {
+      tdlib.profileMusic().toggle(this, currentItem.getMessage());
+    } else if (viewId == R.id.btn_profileMusic && inSearchMode()) {
+      ListItem item = (ListItem) v.getTag();
+      TdApi.Message track = ((InlineResultCommon) item.getData()).getMessage();
+      TGPlayerController player = tdlib.context().player();
+      // Selecting an already playing search result only returns to the player.
+      if (player.getPlayState(tdlib, track) == TGPlayerController.STATE_NONE) {
+        player.playPauseMessage(tdlib, track, profileSearchBuilder);
+      }
+      closeSearchMode(null);
+    } else if (viewId == R.id.btn_custom) {
       ListItem item = (ListItem) v.getTag();
       InlineResultCommon resultCommon = (InlineResultCommon) item.getData();
       tdlib.context().player().playPauseMessage(tdlib, resultCommon.getMessage(), this);
@@ -1094,6 +1188,132 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
       tdlib.context().player().toggleRepeatMode();
     } else if (viewId == R.id.btn_shuffle) {
       tdlib.context().player().togglePlaybackFlag(TGPlayerController.PLAY_FLAG_SHUFFLE);
+    }
+  }
+
+  @Override
+  public void onProfileMusicChanged () {
+    updateProfileSaveButton();
+    if (inSearchMode()) loadProfileSearch();
+  }
+
+  @Override
+  protected void onEnterSearchMode () {
+    if (profileSearchView == null) {
+      profileSearchView = new RecyclerView(context);
+      profileSearchView.setLayoutManager(new LinearLayoutManager(context));
+      profileSearchView.setLayoutParams(FrameLayoutFix.newParams(
+        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+      ViewSupport.setThemedBackground(profileSearchView, ColorId.filling, this);
+      Views.applyBottomInset(profileSearchView, extraBottomInset);
+      profileSearchAdapter = new SettingsAdapter(this, this, null);
+      profileSearchView.setAdapter(profileSearchAdapter);
+      ((ViewGroup) recyclerView.getParent()).addView(profileSearchView);
+      TGLegacyManager.instance().addEmojiListener(profileSearchAdapter);
+    }
+    profileSearchView.setVisibility(View.VISIBLE);
+    super.onEnterSearchMode();
+    loadProfileSearch();
+  }
+
+  private void loadProfileSearch () {
+    profileSearchUserId = tdlib.context().player().getProfileMusicUserId(tdlib);
+    final long userId = profileSearchUserId;
+    if (userId == 0) { closeSearchMode(null); return; }
+    final int generation = ++profileSearchGeneration;
+    profileSearchTracks = null;
+    profileSearchAdapter.setItems(new ListItem[] {new ListItem(ListItem.TYPE_PROGRESS)}, false);
+    tdlib.profileMusic().search(userId, "",
+      () -> !isDestroyed() && inSearchMode() && generation == profileSearchGeneration &&
+        userId == tdlib.context().player().getProfileMusicUserId(tdlib), (audios, error) -> {
+        if (error != null) {
+          UI.showError(error);
+          profileSearchAdapter.setItems(new ListItem[] {new ListItem(ListItem.TYPE_DESCRIPTION,
+            0, 0, R.string.ProfileMusicEmpty)}, false);
+          return;
+        }
+        final ArrayList<TdApi.Message> messages = new ArrayList<>(audios.audios.length);
+        for (TdApi.Audio audio : audios.audios) {
+          TdApi.Message track = tdlib.profileMusic().message(userId, audio);
+          boolean duplicate = false;
+          for (TdApi.Message previous : messages) {
+            if (TGPlayerController.compareTracks(previous, track)) { duplicate = true; break; }
+          }
+          if (!duplicate) messages.add(track);
+        }
+        profileSearchTracks = messages;
+        profileSearchBuilder = new TGPlayerController.PlayListBuilder() {
+          @Override
+          public TGPlayerController.PlayList buildPlayList (TdApi.Message fromMessage) {
+            int origin = -1;
+            for (int i = 0; i < messages.size(); i++) {
+              if (TGPlayerController.compareTracks(messages.get(i), fromMessage)) { origin = i; break; }
+            }
+            return origin == -1 ? null : new TGPlayerController.PlayList(messages, origin)
+              .setProfileMusicSource(userId, audios.audios.length, true)
+              .setPlayListFlags(playFlags & TGPlayerController.PLAYLIST_FLAGS_MASK);
+          }
+          @Override
+          public boolean wouldReusePlayList (TdApi.Message track, boolean reverse,
+              boolean altered, List<TdApi.Message> previous, long chatId) {
+            return tdlib.context().player().isProfileMusicSource(tdlib, userId, null);
+          }
+        };
+        showProfileSearchResults();
+      });
+  }
+
+  @Override
+  protected void onSearchInputChanged (String query) {
+    profileSearchQuery = query.trim().toLowerCase(Locale.ROOT);
+    showProfileSearchResults();
+  }
+
+  private void showProfileSearchResults () {
+    if (profileSearchTracks == null) return;
+    ArrayList<ListItem> results = new ArrayList<>();
+    for (TdApi.Message track : profileSearchTracks) {
+      TdApi.Audio audio = ((TdApi.MessageAudio) track.content).audio;
+      if ((TD.getTitle(audio) + " " + TD.getSubtitle(audio)).toLowerCase(Locale.ROOT)
+          .contains(profileSearchQuery)) {
+        InlineResultCommon result = new InlineResultCommon(context, tdlib, track,
+          (TdApi.MessageAudio) track.content, profileSearchBuilder);
+        result.setMessage(track);
+        result.setIsTrack(true);
+        results.add(new ListItem(ListItem.TYPE_CUSTOM_INLINE, R.id.btn_profileMusic).setData(result));
+      }
+    }
+    if (results.isEmpty()) results.add(new ListItem(ListItem.TYPE_DESCRIPTION, 0, 0,
+      profileSearchQuery.isEmpty() ? R.string.ProfileMusicEmpty : R.string.NoResultsToShow));
+    profileSearchAdapter.setItems(results, false);
+  }
+
+  @Override
+  protected void onLeaveSearchMode () {
+    super.onLeaveSearchMode();
+    profileSearchGeneration++;
+    profileSearchTracks = null;
+    if (profileSearchView != null) profileSearchView.setVisibility(View.GONE);
+  }
+
+  private void updateProfileSaveButton () {
+    if (profileSaveButton == null) return;
+    TdApi.Message track = currentItem != null ? currentItem.getMessage() : null;
+    boolean allowed = TdlibProfileMusic.canSave(track);
+    profileSaveButton.setVisibility(allowed ? View.VISIBLE : View.GONE);
+    if (overlayLayout != null) overlayLayout.requestLayout();
+    if (recyclerView != null) recyclerView.invalidateItemDecorations();
+    profileSaveButton.setEnabled(false);
+    profileSaveButton.setText(Lang.getString(R.string.AudioAddToProfile));
+    if (allowed) {
+      tdlib.profileMusic().check(TD.getFileId(track), saved -> {
+        if (!isDestroyed() && currentItem != null &&
+            TGPlayerController.compareTracks(currentItem.getMessage(), track)) {
+          profileSaveButton.setText(Lang.getString(saved ?
+            R.string.AudioRemoveFromProfile : R.string.AudioAddToProfile));
+          profileSaveButton.setEnabled(true);
+        }
+      });
     }
   }
 
@@ -1245,8 +1465,12 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
     return mayExpandOverlay(recyclerView.getMeasuredWidth(), recyclerView.getMeasuredHeight());
   }
 
-  private static int getMinimumOverlayHeight () {
-    return Screen.dp(112f) + HeaderView.getSize(false);
+  private int getProfileActionHeight () {
+    return currentItem != null && TdlibProfileMusic.canSave(currentItem.getMessage()) ? Screen.dp(48f) : 0;
+  }
+
+  private int getMinimumOverlayHeight () {
+    return Screen.dp(112f) + getProfileActionHeight() + HeaderView.getSize(false);
   }
 
   private int getAvailableOverlayHeight (int totalWidth, int totalHeight) {
@@ -1544,7 +1768,7 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
 
       // Values copy-paste from drawing
       final int overlayHeight = controller.getCurrentOverlayHeight();
-      final int buttonsY = overlayHeight - Screen.dp(34f);
+      final int buttonsY = overlayHeight - Screen.dp(34f) - controller.getProfileActionHeight();
       final int durationsY = buttonsY - Screen.dp(30f);
       final int workingDistance = Math.min(viewWidth, Screen.dp(480f));
       final int startX = viewWidth != workingDistance ? viewWidth / 2 - workingDistance / 2 : 0;
@@ -1981,7 +2205,7 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
 
       // Values
       final int overlayHeight = controller.getCurrentOverlayHeight();
-      final int buttonsY = overlayHeight - Screen.dp(34f);
+      final int buttonsY = overlayHeight - Screen.dp(34f) - controller.getProfileActionHeight();
       final int durationsY = buttonsY - Screen.dp(30f);
       final int workingDistance = Math.min(viewWidth, Screen.dp(480f));
       final int startX = viewWidth != workingDistance ? viewWidth / 2 - workingDistance / 2 : 0;
@@ -1999,7 +2223,7 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
       final int coverLeft = Screen.dp(58f);
       final int coverWidth = Screen.dp(50f);
       final int coverY = HeaderView.getTopOffset() + Screen.dp(5f);
-      final int coverHeight = overlayHeight - getMinimumOverlayHeight();
+      final int coverHeight = overlayHeight - controller.getMinimumOverlayHeight();
 
       final int textStartX = coverLeft + coverWidth + Screen.dp(13f);
       final int textStartY = coverY + Screen.dp(19f);
@@ -2121,6 +2345,8 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
         rectF.set(x - strokeSize / 2, y - strokeSize / 2, x + width + strokeSize / 2, y + height + strokeSize / 2);
         c.drawRoundRect(rectF, radius, radius, Paints.getProgressPaint(Theme.fillingColor(), strokeSize));
       }
+
+      controller.profileSaveButton.setTranslationY(overlayHeight - Screen.dp(48f));
 
       // Buttons
 
@@ -2247,6 +2473,9 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
   public void onFocus () {
     super.onFocus();
     coverView.setDisableAnimation(false);
+    updateProfileSaveButton();
+    TGPlayerController player = tdlib.context().player();
+    player.refreshProfileMusic(tdlib, player.getProfileMusicUserId(tdlib));
     destroyAllStackItemsById(R.id.controller_playback);
   }
 
@@ -2288,6 +2517,10 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
   @Override
   public void fillMenuItems (int id, HeaderView header, LinearLayout menu) {
     if (id == R.id.menu_player) {
+      if (tdlib.context().player().getProfileMusicUserId(tdlib) != 0) {
+        header.addSearchButton(menu, this, ColorId.NONE)
+          .setThemeColorId(ColorId.white, ColorId.headerLightIcon, coverView.getActualCollapseFactor());
+      }
       header.addMoreButton(menu, this, ColorId.NONE)
         .setThemeColorId(ColorId.white, ColorId.headerLightIcon, coverView.getActualCollapseFactor());
     }
@@ -2295,16 +2528,33 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
 
   @Override
   public void onMenuItemPressed (int id, View view) {
-    if (id == R.id.menu_btn_more) {
+    if (id == R.id.menu_btn_search) {
+      openSearchMode();
+    } else if (id == R.id.menu_btn_more) {
       IntList ids = new IntList(3);
       StringList strings = new StringList(3);
 
       TdApi.Message message = currentItem.getMessage();
 
+      if (tdlib.isSelfUserId(tdlib.context().player().getProfileMusicUserId(tdlib))) {
+        ids.append(R.id.btn_addProfileMusic);
+        strings.append(R.string.ProfileMusicAdd);
+        ids.append(R.id.btn_profileMusicPrivacy);
+        strings.append(R.string.ProfileMusicPrivacy);
+      }
+      if (TdlibProfileMusic.canSave(message)) {
+        ids.append(R.id.btn_saveToSavedMessages);
+        strings.append(R.string.AudioSaveTo);
+      }
       TdApi.File file = TD.getFile(message);
-      if (TD.isFileLoaded(file)) {
+      if (ClientPolicy.canSaveMessage(message.canBeSaved, message.selfDestructType != null) && TD.isFileLoaded(file)) {
         ids.append(R.id.btn_saveFile);
         strings.append(R.string.SaveToMusic);
+      }
+
+      if (message instanceof TdlibProfileMusic.Message) {
+        ids.append(R.id.btn_share);
+        strings.append(R.string.Share);
       }
 
       if (message.chatId != 0) {
@@ -2331,7 +2581,17 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
 
   @Override
   public void onMoreItemPressed (int id) {
-    if (id == R.id.btn_share) {
+    if (id == R.id.btn_addProfileMusic) {
+      ProfileMusicPickerController.open(this);
+    } else if (id == R.id.btn_profileMusicPrivacy) {
+      SettingsPrivacyKeyController c = new SettingsPrivacyKeyController(context, tdlib);
+      c.setArguments(new SettingsPrivacyKeyController.Args(new TdApi.UserPrivacySettingShowProfileAudio()));
+      navigateTo(c);
+    } else if (id == R.id.btn_saveToSavedMessages) {
+      tdlib.profileMusic().showSaveOptions(this, currentItem.getMessage());
+    } else if (id == R.id.btn_share && currentItem.getMessage() instanceof TdlibProfileMusic.Message) {
+      tdlib.profileMusic().share(this, ((TdApi.MessageAudio) currentItem.getMessage().content).audio);
+    } else if (id == R.id.btn_share) {
       ShareController c = new ShareController(context, tdlib);
       c.setArguments(new ShareController.Args(currentItem.getMessage()).setAllowCopyLink(true));
       c.show();

@@ -42,6 +42,7 @@ import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.data.TGMessage;
 import org.thunderdog.challegram.data.TGMessageBotInfo;
+import org.thunderdog.challegram.data.TGMessagePoll;
 import org.thunderdog.challegram.data.TGMessageVideo;
 import org.thunderdog.challegram.data.ThreadInfo;
 import org.thunderdog.challegram.mediaview.data.MediaItem;
@@ -610,6 +611,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
     tdlib.settings().removePinnedMessageDismissListener(this);
     highlightMessageId = null;
     highlightQuote = null;
+    highlightPollOptionId = null;
     pendingQuoteScroll = null;
     hasScrolled = false;
     lastViewedMentionMessageId = 0;
@@ -625,6 +627,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
     unsubscribeFromUpdates();
     mentionsHandler = null;
     reactionsHandler = null;
+    resetUnreadPollVotesNavigation();
     closestMentions = null;
     closestUnreadReactions = null;
     final long chatId = loader.getChatId();
@@ -781,6 +784,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   }
 
   public void openChat (TdApi.Chat chat, @Nullable ThreadInfo messageThread, @Nullable TdApi.MessageTopic topicId, TdApi.SearchMessagesFilter filter, MessagesController context, boolean areScheduled, boolean needPinnedMessages) {
+    resetUnreadPollVotesNavigation();
     if (chat.id != 0) {
       if (Log.isEnabled(Log.TAG_MESSAGES_LOADER)) {
         Log.i(Log.TAG_MESSAGES_LOADER, "[CREATE] chatId:%d", chat.id);
@@ -837,13 +841,16 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
           return false;
         MessageProvider provider = (MessageProvider) view;
         TGMessage msg = provider.getMessage();
-        if (msg.markAsViewed() || msg.containsUnreadReactions()) {
+        if (msg.markAsViewed() || msg.containsUnreadReactions() || message.containsUnreadPollVotes) {
           long messageId = msg.getBiggestId();
           if (msg.containsUnreadMention() && messageId > lastViewedMentionMessageId) {
             lastViewedMentionMessageId = messageId;
           }
           if (msg.containsUnreadReactions() && messageId > lastViewedReactionMessageId) {
             lastViewedReactionMessageId = messageId;
+          }
+          if (message.containsUnreadPollVotes && message.id > lastViewedPollVoteMessageId) {
+            lastViewedPollVoteMessageId = message.id;
           }
           return true;
         }
@@ -875,6 +882,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
     if (this.highlightMessageId == null || !this.highlightMessageId.compareTo(highlightMessageId) ||
         highlightMode != HIGHLIGHT_MODE_NORMAL) {
       highlightQuote = null;
+      highlightPollOptionId = null;
       pendingQuoteScroll = null;
     }
     this.highlightMessageId = highlightMessageId;
@@ -2774,6 +2782,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
 
   private MessageId highlightMessageId;
   private @Nullable TdApi.InputTextQuote highlightQuote;
+  private @Nullable String highlightPollOptionId;
   private @Nullable Runnable pendingQuoteScroll;
   private int highlightMode;
   public void setHighlightMessageId (MessageId messageId, int highlightMode) {
@@ -2782,9 +2791,15 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
 
   public void setHighlightMessageId (MessageId messageId, int highlightMode,
                                      @Nullable TdApi.InputTextQuote quote) {
+    setHighlightMessageId(messageId, highlightMode, quote, null);
+  }
+
+  public void setHighlightMessageId (MessageId messageId, int highlightMode,
+                                     @Nullable TdApi.InputTextQuote quote, @Nullable String pollOptionId) {
     this.highlightMessageId = messageId;
     this.highlightMode = highlightMode;
     this.highlightQuote = quote;
+    this.highlightPollOptionId = pollOptionId;
     this.pendingQuoteScroll = null;
   }
 
@@ -2969,6 +2984,86 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
       }
     };
     tdlib.client().send(new TdApi.SearchChatMessages(chatId, topicId, null, null, fromMessageId, -9, 10, new TdApi.SearchMessagesFilterUnreadReaction()), reactionsHandler);
+  }
+
+
+
+  // Poll votes
+
+  private ArrayList<TdApi.Message> closestUnreadPollVotes;
+  private CancellableResultHandler pollVotesHandler;
+  private long lastViewedPollVoteMessageId = 0;
+
+  private void resetUnreadPollVotesNavigation () {
+    if (pollVotesHandler != null) {
+      pollVotesHandler.cancel();
+      pollVotesHandler = null;
+    }
+    closestUnreadPollVotes = null;
+    lastViewedPollVoteMessageId = 0;
+  }
+
+  private void setUnreadPollVotes (final CancellableResultHandler handler, final TdApi.FoundChatMessages messages, final long fromMessageId) {
+    tdlib.ui().post(() -> {
+      if (handler == pollVotesHandler && !controller.isDestroyed()) {
+        pollVotesHandler = null;
+        if (messages != null && messages.messages.length > 0) {
+          setUnreadPollVotesImpl(messages.messages, fromMessageId);
+        }
+      }
+    });
+  }
+
+  private void setUnreadPollVotesImpl (final TdApi.Message[] messages, final long fromMessageId) {
+    ArrayList<TdApi.Message> votes = new ArrayList<>(messages.length);
+    Collections.addAll(votes, messages);
+    this.closestUnreadPollVotes = votes;
+    if (!votes.isEmpty()) {
+      scrollToNextUnreadPollVote();
+    }
+  }
+
+  public void scrollToNextUnreadPollVote () {
+    if (controller.isDestroyed() || inSpecialMode()) {
+      return;
+    }
+    if (closestUnreadPollVotes != null && !closestUnreadPollVotes.isEmpty()) {
+      TdApi.Message message = closestUnreadPollVotes.remove(0);
+      highlightMessage(new MessageId(message.chatId, message.id), HIGHLIGHT_MODE_NORMAL, null, true);
+      return;
+    }
+    if (pollVotesHandler != null) {
+      return;
+    }
+    final long fromMessageId;
+    if (lastViewedPollVoteMessageId != 0) {
+      fromMessageId = lastViewedPollVoteMessageId;
+    } else {
+      TGMessage message = adapter.getTopActiveMessage();
+      if (message == null) {
+        return;
+      }
+      fromMessageId = message.getBiggestId();
+    }
+    final long chatId = loader.getChatId();
+    final TdApi.MessageTopic topicId = loader.getTopicId();
+    final AtomicBoolean isRetry = new AtomicBoolean();
+    pollVotesHandler = new CancellableResultHandler() {
+      @Override
+      public void processResult (final TdApi.Object object) {
+        if (object.getConstructor() == TdApi.FoundChatMessages.CONSTRUCTOR) {
+          TdApi.FoundChatMessages messages = (TdApi.FoundChatMessages) object;
+          if (messages.totalCount > 0 && messages.messages.length == 0 && !isRetry.getAndSet(true)) {
+            tdlib.client().send(new TdApi.SearchChatMessages(chatId, topicId, null, null, 0, 0, 10, new TdApi.SearchMessagesFilterUnreadPollVote()), this);
+          } else {
+            setUnreadPollVotes(this, messages, isRetry.get() ? 0 : fromMessageId);
+          }
+        } else {
+          setUnreadPollVotes(this, null, fromMessageId);
+        }
+      }
+    };
+    tdlib.client().send(new TdApi.SearchChatMessages(chatId, topicId, null, null, fromMessageId, -9, 10, new TdApi.SearchMessagesFilterUnreadPollVote()), pollVotesHandler);
   }
 
 
@@ -3196,6 +3291,17 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
 
     // scrollToPositionWithOffsetImpl(index, 0);
 
+    if (!StringUtils.isEmpty(highlightPollOptionId) && scrollMessage instanceof TGMessagePoll &&
+        highlightMessageId != null &&
+        highlightMessageId.compareTo(scrollMessage.getChatId(), scrollMessage.getId())) {
+      TGMessagePoll pollMessage = (TGMessagePoll) scrollMessage;
+      pollMessage.highlightOption(highlightPollOptionId);
+      RectF bounds = pollMessage.getOptionBounds(highlightPollOptionId);
+      if (bounds != null) {
+        ensurePollOptionVisible(pollMessage);
+      }
+    }
+
     /*int padding = scrollMessage.findTopEdge();
     if ((fullHeight - padding) > height) {
       scrollToPositionWithOffsetImpl(index, height - fullHeight + padding);
@@ -3243,11 +3349,17 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
 
   public void highlightMessage (MessageId messageId, int highlightMode, long[] returnToMessageIds,
                                 boolean allowSmooth, @Nullable TdApi.InputTextQuote quote) {
+    highlightMessage(messageId, highlightMode, returnToMessageIds, allowSmooth, quote, null);
+  }
+
+  public void highlightMessage (MessageId messageId, int highlightMode, long[] returnToMessageIds,
+                                boolean allowSmooth, @Nullable TdApi.InputTextQuote quote,
+                                @Nullable String pollOptionId) {
     if (isEventLog()) {
       return;
     }
 
-    setHighlightMessageId(messageId, highlightMode, quote);
+    setHighlightMessageId(messageId, highlightMode, quote, pollOptionId);
     if (!Arrays.equals(this.returnToMessageIds, returnToMessageIds)) {
       this.returnToMessageIds = returnToMessageIds;
       saveScrollPosition();
@@ -3302,6 +3414,51 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
     recycler.post(() -> {
       if (highlightQuote != quote || userScrollActionsCount != scrollActions ||
           highlightMessageId == null || !highlightMessageId.compareTo(message.getChatId(), messageId)) {
+        return;
+      }
+      if (recycler.getScrollState() == RecyclerView.SCROLL_STATE_SETTLING) {
+        pendingQuoteScroll = scroll;
+      } else {
+        scroll.run();
+      }
+    });
+  }
+
+  private void ensurePollOptionVisible (TGMessagePoll message) {
+    final String optionId = highlightPollOptionId;
+    final RecyclerView recycler = controller.getMessagesView();
+    final int scrollActions = userScrollActionsCount;
+    Runnable scroll = () -> {
+      if (!StringUtils.equalsOrBothEmpty(highlightPollOptionId, optionId) ||
+          userScrollActionsCount != scrollActions || highlightMessageId == null ||
+          !highlightMessageId.compareTo(message.getChatId(), message.getId()) ||
+          recycler.getScrollState() == RecyclerView.SCROLL_STATE_DRAGGING) {
+        return;
+      }
+      int index = adapter.indexOfMessageContainer(highlightMessageId);
+      View view = index >= 0 ? manager.findViewByPosition(index) : null;
+      if (view == null || adapter.getMessage(index) != message) return;
+      RectF bounds = message.getOptionBounds(optionId);
+      if (bounds == null) return;
+      int viewportTop = Math.max(recycler.getPaddingTop(), controller.getTopOffset());
+      int viewportBottom = recycler.getHeight() - recycler.getPaddingBottom();
+      if (viewportBottom <= viewportTop) return;
+      float top = view.getTop() + bounds.top;
+      float bottom = view.getTop() + bounds.bottom;
+      if (top < viewportTop || bottom > viewportBottom) {
+        float visibleHeight = Math.min(bounds.height(), viewportBottom - viewportTop);
+        int dy = Math.round(top + visibleHeight / 2f - (viewportTop + viewportBottom) / 2f);
+        if (Settings.instance().needReduceMotion()) {
+          recycler.scrollBy(0, dy);
+        } else {
+          recycler.smoothScrollBy(0, dy);
+        }
+      }
+    };
+    recycler.post(() -> {
+      if (!StringUtils.equalsOrBothEmpty(highlightPollOptionId, optionId) ||
+          userScrollActionsCount != scrollActions || highlightMessageId == null ||
+          !highlightMessageId.compareTo(message.getChatId(), message.getId())) {
         return;
       }
       if (recycler.getScrollState() == RecyclerView.SCROLL_STATE_SETTLING) {
@@ -3806,6 +3963,26 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
     tdlib.ui().post(() -> {
       if (loader.getChatId() == chatId) {
         updateMessageOpened(messageId);
+      }
+    });
+  }
+
+  @Override
+  public void onMessageUnreadPollVotesChanged (long chatId, long messageId, boolean hasUnreadPollVote, int unreadPollVoteCount) {
+    tdlib.ui().post(() -> {
+      if (loader.getChatId() != chatId || controller.isDestroyed()) {
+        return;
+      }
+      if (closestUnreadPollVotes != null && !hasUnreadPollVote) {
+        closestUnreadPollVotes.removeIf(message -> message.id == messageId);
+      }
+      int index = adapter.indexOfMessageContainer(messageId);
+      if (index != -1) {
+        TdApi.Message message = adapter.getItem(index).getMessage(messageId);
+        if (message != null) {
+          message.containsUnreadPollVotes = hasUnreadPollVote;
+          viewMessages(false);
+        }
       }
     });
   }

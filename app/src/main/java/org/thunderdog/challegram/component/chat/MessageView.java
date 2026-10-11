@@ -717,6 +717,11 @@ public class MessageView extends SparseDrawableView implements Destroyable, Draw
       switch (content.getConstructor()) {
         case TdApi.MessagePoll.CONSTRUCTOR: {
           TdApi.Poll poll = ((TdApi.MessagePoll) content).poll;
+          if (msg.lastMessageProperties().canGetPollVoteStatistics) {
+            ids.append(R.id.btn_pollStatistics);
+            icons.append(R.drawable.baseline_bar_chart_24);
+            strings.append(R.string.ViewStats);
+          }
           if (!poll.isClosed) {
             boolean isQuiz = poll.type.getConstructor() == TdApi.PollTypeQuiz.CONSTRUCTOR;
             if (TD.canRetractVote(poll)) {
@@ -960,6 +965,15 @@ public class MessageView extends SparseDrawableView implements Destroyable, Draw
       TdApi.Message singleMessage = msg.getMessage();
       TdApi.Message[] allMessages = msg.getAllMessages();
 
+      boolean canAddProfileMusic = allMessages.length > 0;
+      for (TdApi.Message message : allMessages) {
+        canAddProfileMusic &= org.thunderdog.challegram.telegram.TdlibProfileMusic.canSave(message);
+      }
+      if (canAddProfileMusic) {
+        ids.append(R.id.btn_profileAudio);
+        strings.append(allMessages.length == 1 ? R.string.AudioSaveTo : R.string.AudioAddToProfile);
+        icons.append(R.drawable.baseline_music_note_24);
+      }
       List<TD.DownloadedFile> downloadedFiles = TD.getDownloadedFiles(msg.tdlib(), allMessages);
       if (downloadedFiles.isEmpty() && singleMessage.content.getConstructor() == TdApi.MessageText.CONSTRUCTOR && msg instanceof TGMessageText) {
         TGWebPage webPage = ((TGMessageText) msg).getParsedLinkPreview();

@@ -15,6 +15,7 @@
 package org.thunderdog.challegram.component.chat;
 
 import android.content.Context;
+import android.os.SystemClock;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -31,6 +32,7 @@ import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.tool.Keyboard;
 import org.thunderdog.challegram.tool.Screen;
+import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.tool.Views;
 import org.thunderdog.challegram.v.EditText;
 import org.thunderdog.challegram.widget.EmojiTextView;
@@ -326,43 +328,65 @@ public class CommandKeyboardLayout extends ViewGroup implements ViewTreeObserver
   // TODO: 13/08/15 Merge this code with EmojiLayout
   // Keyboard utils
 
-  int keyboardState;
+  private static final int STATE_NONE = 0;
+  private static final int STATE_AWAITING_SHOW = 1;
+  private static final int STATE_AWAITING_HIDE = 2;
+  private static final long KEYBOARD_TRANSITION_TIMEOUT_MS = 250L;
+
+  private int keyboardState;
+  private long keyboardTransitionDeadline;
+
+  private void awaitKeyboardState (int state) {
+    keyboardState = state;
+    keyboardTransitionDeadline = SystemClock.uptimeMillis() + KEYBOARD_TRANSITION_TIMEOUT_MS;
+    UI.getContext(getContext()).getRootView().skipNextImeAnimation(KEYBOARD_TRANSITION_TIMEOUT_MS);
+  }
+
+  public void prepareKeyboardShow () {
+    awaitKeyboardState(STATE_AWAITING_SHOW);
+  }
 
   public void showKeyboard (EditText input) {
-    keyboardState = 1;
+    prepareKeyboardShow();
     Keyboard.show(input);
   }
 
   public void hideKeyboard (EditText input) {
-    keyboardState = 2;
+    awaitKeyboardState(STATE_AWAITING_HIDE);
     Keyboard.hide(input);
   }
 
   public void onKeyboardStateChanged (boolean visible) {
-    if (keyboardState == 1 && visible) {
-      framesDropped = 35;
-    } else if (keyboardState == 2 && !visible) {
-      keyboardState = 0;
+    if ((keyboardState == STATE_AWAITING_SHOW && visible) ||
+        (keyboardState == STATE_AWAITING_HIDE && !visible)) {
+      cancelKeyboardTransition();
     }
   }
 
-  private int framesDropped;
+  public void cancelKeyboardTransition () {
+    keyboardState = STATE_NONE;
+    keyboardTransitionDeadline = 0;
+    requestLayout();
+  }
+
+  @Override
+  protected void onAttachedToWindow () {
+    super.onAttachedToWindow();
+    getViewTreeObserver().addOnPreDrawListener(this);
+  }
+
+  @Override
+  protected void onDetachedFromWindow () {
+    cancelKeyboardTransition();
+    getViewTreeObserver().removeOnPreDrawListener(this);
+    super.onDetachedFromWindow();
+  }
 
   @Override
   public boolean onPreDraw () {
-    if (keyboardState == 1) {
-      if (++framesDropped >= 40) {
-        framesDropped = 0;
-        keyboardState = 0;
-        return true;
-      }
-      return false;
-    }
-
-    if (keyboardState == 2) {
-      if (++framesDropped >= 40) {
-        framesDropped = 0;
-        keyboardState = 0;
+    if (keyboardState != STATE_NONE) {
+      if (SystemClock.uptimeMillis() >= keyboardTransitionDeadline) {
+        cancelKeyboardTransition();
         return true;
       }
       return false;
