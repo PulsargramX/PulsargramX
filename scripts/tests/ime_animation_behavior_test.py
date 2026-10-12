@@ -14,10 +14,12 @@ def run_java(source: str) -> None:
     with tempfile.TemporaryDirectory(prefix="ime-animation-test-") as directory:
         java_file = Path(directory) / "ImeAnimationTest.java"
         java_file.write_text(source, encoding="utf-8")
-        subprocess.run(
+        compilation = subprocess.run(
             ["javac", "--release", "17", "-d", directory, str(java_file)],
-            check=True, capture_output=True, text=True,
+            capture_output=True, text=True,
         )
+        if compilation.returncode:
+            raise AssertionError(compilation.stdout + compilation.stderr)
         result = subprocess.run(
             ["java", "-cp", directory, "ImeAnimationTest"],
             capture_output=True, text=True,
@@ -36,7 +38,12 @@ class ImeAnimationBehaviorTest(unittest.TestCase):
         callback = java_method(source, "private static final class ImeInsetsAnimationCallback")
         callback = callback.replace("android.view.WindowInsetsAnimation", "InsetsAnimation")
         callback = callback.replace("android.view.WindowInsets", "Insets")
+        callback = callback.replace("android.graphics.Insets", "EdgeInsets")
+        callback = callback.replace("android.util.Log", "Log")
         visibility = java_method(source, "protected void onWindowVisibilityChanged (")
+        measure = java_method(source, "protected void onMeasure (")
+        # Keep the production animation hook before Android child measurement.
+        measure = measure[:measure.index("    if (Build.VERSION.SDK_INT")] + "  }"
         messages = read("app/src/main/java/org/thunderdog/challegram/ui/MessagesController.java")
         composer = messages[messages.index("inputView = new InputView(context, tdlib, this)"):]
         touch = java_method(composer, "public boolean onTouchEvent (MotionEvent event)")
@@ -54,16 +61,40 @@ public class ImeAnimationTest {
   static class Insets {
     final int height;
     Insets(int height) { this.height = height; }
+    EdgeInsets getInsets(int type) { return EdgeInsets.of(0, 0, 0, height); }
     static class Type { static int ime() { return 1; } }
+    static class Builder {
+      int height;
+      Builder(Insets original) { height = original.height; }
+      Builder setInsets(int type, EdgeInsets insets) { height = insets.bottom; return this; }
+      Builder setVisible(int type, boolean visible) { return this; }
+      Insets build() { return new Insets(height); }
+    }
+  }
+  static class EdgeInsets {
+    final int left, top, right, bottom;
+    EdgeInsets(int l, int t, int r, int b) { left = l; top = t; right = r; bottom = b; }
+    static EdgeInsets of(int l, int t, int r, int b) { return new EdgeInsets(l, t, r, b); }
   }
   static class InsetsAnimation {
     final int mask;
     final long duration;
+    float fraction;
     InsetsAnimation(int mask) { this(mask, 200); }
     InsetsAnimation(int mask, long duration) { this.mask = mask; this.duration = duration; }
     int getTypeMask() { return mask; }
     long getDurationMillis() { return duration; }
-    static class Bounds {}
+    float getInterpolatedFraction() { return fraction; }
+    static class Bounds {
+      final EdgeInsets lower, upper;
+      Bounds() { this(0, 320); }
+      Bounds(int lower, int upper) {
+        this.lower = EdgeInsets.of(0, 0, 0, lower);
+        this.upper = EdgeInsets.of(0, 0, 0, upper);
+      }
+      EdgeInsets getLowerBound() { return lower; }
+      EdgeInsets getUpperBound() { return upper; }
+    }
     abstract static class Callback {
       static final int DISPATCH_MODE_STOP = 0;
       Callback(int mode) {}
@@ -83,29 +114,33 @@ public class ImeAnimationTest {
     ImeInsetsAnimation imeInsetsAnimation;
     Object animationCallback;
     Insets staticInsets = new Insets(0);
+    Object windowInsetsRaw = new Insets(0);
     final List<Integer> applied = new ArrayList<>();
-    Runnable nextFrame;
+    final List<Runnable> nextFrame = new ArrayList<>();
     final Map<Runnable, Long> delayed = new HashMap<>();
     int insetRequests;
+    int layoutRequests;
     void setWindowInsetsAnimationCallback(Object callback) { animationCallback = callback; }
     void requestApplyInsets() { insetRequests++; }
-    void requestLayout() {}
+    void requestLayout() { layoutRequests++; }
     void removeCallbacks(Runnable action) {
-      if (nextFrame == action) nextFrame = null;
+      nextFrame.removeIf(item -> item == action);
       delayed.remove(action);
     }
     void postDelayed(Runnable action, long delay) {
       delayed.put(action, SystemClock.now + delay);
     }
-    void postOnAnimation(Runnable action) { nextFrame = action; }
+    void postOnAnimation(Runnable action) { nextFrame.add(action); }
     Insets getRootWindowInsets() { return staticInsets; }
     void processWindowInsets(Object insets, boolean force) {
+      windowInsetsRaw = insets;
       applied.add(((Insets) insets).height);
     }
     void frame() {
-      Runnable action = nextFrame;
-      nextFrame = null;
-      if (action != null) action.run();
+      List<Runnable> actions = new ArrayList<>(nextFrame);
+      nextFrame.clear();
+      for (Runnable action : actions) action.run();
+      onMeasure(0, 0);
     }
     void advance(long millis) {
       SystemClock.now += millis;
@@ -122,6 +157,10 @@ public class ImeAnimationTest {
     }
     void skipNextImeAnimation(long timeoutMs) { UI.callback.skipNextAnimation(timeoutMs); }
     __WINDOW_VISIBILITY__
+    __MEASURE__
+  }
+  static class Log {
+    static void w(String message, Object... args) {}
   }
   static class UI {
     static final UI context = new UI();
@@ -192,6 +231,127 @@ public class ImeAnimationTest {
     UI.callback = callback;
     root.imeInsetsAnimation = callback;
     Composer composer = new Composer();
+    // Android 17 ViewRootImpl increments its window counter at onStart but
+    // decrements it for cancellation before onStart as well. Subsequent starts
+    // then leave the count at zero: prepare/start/end arrive, progress is dropped.
+    int platformAnimationCount = 0;
+    InsetsAnimation cancelledBars = new InsetsAnimation(2);
+    callback.onPrepare(cancelledBars);
+    callback.onEnd(cancelledBars);
+    platformAnimationCount--;
+    for (int destination : new int[] {320, 0, 320}) {
+      root.applied.clear();
+      InsetsAnimation lostProgress = new InsetsAnimation(1);
+      callback.onPrepare(lostProgress);
+      root.apply(callback, destination);
+      platformAnimationCount++;
+      callback.onStart(lostProgress, new InsetsAnimation.Bounds());
+      for (float fraction : new float[] {0f, .25f, .5f, .75f, 1f}) {
+        lostProgress.fraction = fraction;
+        int height = destination == 320 ? Math.round(320 * fraction) : Math.round(320 * (1 - fraction));
+        if (platformAnimationCount > 0) progress(callback, lostProgress, height);
+        root.frame();
+      }
+      check(root.applied.contains(160),
+        "A window that drops progress callbacks must still render intermediate IME heights");
+      check(root.applied.get(root.applied.size() - 1) == destination,
+        "Follow the actual system fraction through opening and closing");
+      platformAnimationCount--;
+      callback.onEnd(lostProgress);
+      root.frame();
+      check(!callback.isRunning(), "Fallback must settle every subsequent animation");
+      check(root.nextFrame.isEmpty(), "Finishing must stop requesting animation frames");
+    }
+
+    InsetsAnimation lostGesture = new InsetsAnimation(1, -1);
+    callback.onPrepare(lostGesture);
+    root.apply(callback, 0);
+    callback.onStart(lostGesture, new InsetsAnimation.Bounds());
+    root.applied.clear();
+    for (float fraction : new float[] {.25f, .5f, .25f, 0f}) {
+      lostGesture.fraction = fraction;
+      root.frame();
+    }
+    check(root.applied.equals(List.of(240, 160, 240, 320)),
+      "Dropped predictive progress must follow drag reversal and cancellation");
+    root.advance(5000);
+    check(callback.isRunning(), "Fallback must not time out a held predictive gesture");
+    int heldLayoutRequests = root.layoutRequests;
+    root.frame();
+    check(root.layoutRequests == heldLayoutRequests, "A held gesture needs no repeated layout");
+    callback.onEnd(lostGesture);
+    root.frame();
+    check(root.applied.get(root.applied.size() - 1) == 320,
+      "Cancelled predictive fallback keeps the rendered shown height");
+
+    InsetsAnimation committedGesture = new InsetsAnimation(1, -1);
+    callback.onPrepare(committedGesture);
+    root.apply(callback, 0);
+    callback.onStart(committedGesture, new InsetsAnimation.Bounds());
+    committedGesture.fraction = .5f;
+    root.frame();
+    committedGesture.fraction = 1f;
+    callback.onEnd(committedGesture);
+    root.frame();
+    check(root.applied.get(root.applied.size() - 1) == 0,
+      "A committed gesture must apply its final live fraction even without a final draw");
+    check(root.nextFrame.isEmpty(), "Predictive completion must stop polling");
+
+    callback.skipNextAnimation(250);
+    InsetsAnimation suppressedFallback = new InsetsAnimation(1);
+    callback.onPrepare(suppressedFallback);
+    root.apply(callback, 320);
+    root.applied.clear();
+    callback.onStart(suppressedFallback, new InsetsAnimation.Bounds());
+    suppressedFallback.fraction = .5f;
+    root.frame();
+    check(root.applied.isEmpty(), "Panel swaps must also suppress fallback IME frames");
+    check(root.nextFrame.isEmpty(), "A suppressed animation must not poll the fraction");
+    callback.onEnd(suppressedFallback);
+    root.frame();
+
+    InsetsAnimation restoredProgress = new InsetsAnimation(1);
+    callback.onPrepare(restoredProgress);
+    root.apply(callback, 0);
+    callback.onStart(restoredProgress, new InsetsAnimation.Bounds());
+    restoredProgress.fraction = .5f;
+    root.applied.clear();
+    progress(callback, restoredProgress, 173);
+    int layoutRequests = root.layoutRequests;
+    root.frame();
+    check(root.applied.equals(List.of(173)), "Native insets must win over interpolated fallback");
+    check(root.layoutRequests == layoutRequests, "Native frames need no extra fallback layout");
+    restoredProgress.fraction = .75f;
+    root.frame();
+    check(root.applied.equals(List.of(173, 80)),
+      "Fallback must take over if native progress disappears partway through an animation");
+    restoredProgress.fraction = .5f;
+    root.frame();
+    check(root.applied.get(root.applied.size() - 1) == 160,
+      "Reversing through an old native fraction must not leave fallback geometry stale");
+    restoredProgress.fraction = .9f;
+    progress(callback, restoredProgress, 29);
+    root.frame();
+    check(root.applied.get(root.applied.size() - 1) == 29,
+      "Native geometry must take over again if callbacks return");
+    callback.onEnd(restoredProgress);
+    root.frame();
+
+    InsetsAnimation removedFallback = new InsetsAnimation(1);
+    callback.onPrepare(removedFallback);
+    root.apply(callback, 320);
+    callback.onStart(removedFallback, new InsetsAnimation.Bounds());
+    removedFallback.fraction = .5f;
+    root.frame();
+    callback.detach();
+    root.applied.clear();
+    removedFallback.fraction = .75f;
+    root.frame();
+    check(root.applied.isEmpty() && root.nextFrame.isEmpty(),
+      "A detached root must release fallback frames and sampled geometry");
+    callback.attach();
+
+    root.apply(callback, 0);
     root.applied.clear();
     composer.input.onTouchEvent(new MotionEvent(MotionEvent.ACTION_UP));
     root.apply(callback, 320);
@@ -555,6 +715,7 @@ public class ImeAnimationTest {
 """
         harness = harness.replace("__TRANSITIONS__", transitions).replace("__TOUCH__", touch)
         harness = harness.replace("__WINDOW_VISIBILITY__", visibility)
+        harness = harness.replace("__MEASURE__", measure)
         run_java(harness + interface + callback + "\n}\n")
 
     def test_read_details_do_not_delay_menu_opening(self) -> None:

@@ -196,6 +196,7 @@ public class RootFrameLayout extends FrameLayoutFix {
     boolean isRunning ();
     boolean deferInsets (Object insets);
     void skipNextAnimation (long timeoutMs);
+    void updateInsetsBeforeMeasure ();
   }
 
   private ImeInsetsAnimation imeInsetsAnimation;
@@ -219,8 +220,18 @@ public class RootFrameLayout extends FrameLayoutFix {
     private boolean skipAnimation;
     private long skipAnimationDeadline;
     private long activeSkipAnimationDeadline;
+    private android.view.WindowInsetsAnimation sampledAnimation;
+    private android.view.WindowInsetsAnimation.Bounds sampledBounds;
+    private int startingImeBottom;
+    private boolean openingAnimation;
+    private boolean receivedProgress;
+    private float progressFraction = Float.NaN;
+    private float sampledFraction = Float.NaN;
+    private int sampledFrames;
+    private boolean reportedFallback;
     private final Runnable settle = this::settleInsets;
     private final Runnable recoverAnimation = this::recoverAnimationInsets;
+    private final Runnable requestAnimationLayout = this::requestAnimationLayout;
 
     ImeInsetsAnimationCallback (RootFrameLayout root) {
       // RootFrameLayout already redispatches child insets while laying out each frame.
@@ -246,6 +257,7 @@ public class RootFrameLayout extends FrameLayoutFix {
     public void reset () {
       root.removeCallbacks(settle);
       root.removeCallbacks(recoverAnimation);
+      clearSampling();
       animations.clear();
       awaitingSettlement = false;
       animationStarted = false;
@@ -271,6 +283,7 @@ public class RootFrameLayout extends FrameLayoutFix {
       if (!animations.isEmpty() || awaitingSettlement) {
         skipAnimation = true;
         activeSkipAnimationDeadline = skipAnimationDeadline;
+        root.removeCallbacks(requestAnimationLayout);
         root.requestApplyInsets();
       }
     }
@@ -305,6 +318,12 @@ public class RootFrameLayout extends FrameLayoutFix {
       skipAnimationDeadline = 0;
       root.removeCallbacks(settle);
       root.removeCallbacks(recoverAnimation);
+      clearSampling();
+      android.view.WindowInsets startingInsets =
+        root.windowInsetsRaw instanceof android.view.WindowInsets ?
+          (android.view.WindowInsets) root.windowInsetsRaw : root.getRootWindowInsets();
+      startingImeBottom = startingInsets != null ?
+        startingInsets.getInsets(android.view.WindowInsets.Type.ime()).bottom : 0;
       animations.clear();
       awaitingSettlement = false;
       animationStarted = false;
@@ -318,6 +337,14 @@ public class RootFrameLayout extends FrameLayoutFix {
       android.view.WindowInsetsAnimation animation, android.view.WindowInsetsAnimation.Bounds bounds) {
       if (animations.contains(animation)) {
         onAnimationStarted(animation);
+        sampledAnimation = animation;
+        sampledBounds = bounds;
+        openingAnimation = pendingInsets != null ?
+          pendingInsets.getInsets(android.view.WindowInsets.Type.ime()).bottom > startingImeBottom :
+          startingImeBottom <= bounds.getLowerBound().bottom;
+        if (!skipAnimation) {
+          root.postOnAnimation(requestAnimationLayout);
+        }
       }
       return bounds;
     }
@@ -355,6 +382,9 @@ public class RootFrameLayout extends FrameLayoutFix {
       }
       if (runningImeAnimation != null) {
         onAnimationStarted(runningImeAnimation);
+        receivedProgress = true;
+        progressFraction = runningImeAnimation.getInterpolatedFraction();
+        sampledFraction = progressFraction;
         progressInsets = insets;
         if (!skipAnimation) {
           root.processWindowInsets(insets, false);
@@ -364,6 +394,7 @@ public class RootFrameLayout extends FrameLayoutFix {
         // using this frame, but never retire a replacement still awaiting onStart.
         root.removeCallbacks(recoverAnimation);
         animations.clear();
+        clearSampling();
         finalAppliedInsets = insets;
         awaitingSettlement = true;
         root.postOnAnimation(settle);
@@ -373,6 +404,15 @@ public class RootFrameLayout extends FrameLayoutFix {
 
     @Override
     public void onEnd (android.view.WindowInsetsAnimation animation) {
+      if (animation == sampledAnimation) {
+        updateInsetsBeforeMeasure();
+        if (reportedFallback) {
+          android.util.Log.w("ImeAnimation", "IME fallback ended: root=" +
+            Integer.toHexString(System.identityHashCode(root)) + " frames=" + sampledFrames +
+            " nativeProgress=" + receivedProgress);
+        }
+        clearSampling();
+      }
       if (!animations.remove(animation) || !animations.isEmpty()) {
         return;
       }
@@ -383,10 +423,82 @@ public class RootFrameLayout extends FrameLayoutFix {
       root.postOnAnimation(settle);
     }
 
+    private void clearSampling () {
+      root.removeCallbacks(requestAnimationLayout);
+      sampledAnimation = null;
+      sampledBounds = null;
+      receivedProgress = false;
+      progressFraction = Float.NaN;
+      sampledFraction = Float.NaN;
+      sampledFrames = 0;
+      reportedFallback = false;
+    }
+
+    private void requestAnimationLayout () {
+      if (sampledAnimation != null && !skipAnimation &&
+          root.getWindowVisibility() == View.VISIBLE) {
+        float fraction = sampledAnimation.getInterpolatedFraction();
+        if (fraction != progressFraction &&
+            (sampledAnimation.getDurationMillis() >= 0 || fraction != sampledFraction)) {
+          root.requestLayout();
+        }
+        root.postOnAnimation(requestAnimationLayout);
+      }
+    }
+
+    @Override
+    public void updateInsetsBeforeMeasure () {
+      if (sampledAnimation == null || skipAnimation ||
+          root.getWindowVisibility() != View.VISIBLE) {
+        return;
+      }
+      // Android can dispatch onEnd for a system-bar animation cancelled before
+      // onStart. On Android 17 this underflows ViewRootImpl's animation counter,
+      // which then drops all onProgress callbacks for this window. The animation
+      // object still receives the real system fraction, including predictive drags.
+      // Sample it before measurement so every chat follows those frames anyway.
+      float fraction = sampledAnimation.getInterpolatedFraction();
+      if (Float.isNaN(fraction) || fraction == sampledFraction) {
+        return;
+      }
+      android.view.WindowInsets baseInsets = pendingInsets != null ?
+        pendingInsets : root.getRootWindowInsets();
+      if (baseInsets == null) {
+        return;
+      }
+      android.graphics.Insets from = openingAnimation ?
+        sampledBounds.getLowerBound() : sampledBounds.getUpperBound();
+      android.graphics.Insets to = openingAnimation ?
+        sampledBounds.getUpperBound() : sampledBounds.getLowerBound();
+      android.graphics.Insets ime = android.graphics.Insets.of(
+        Math.round(from.left + (to.left - from.left) * fraction),
+        Math.round(from.top + (to.top - from.top) * fraction),
+        Math.round(from.right + (to.right - from.right) * fraction),
+        Math.round(from.bottom + (to.bottom - from.bottom) * fraction)
+      );
+      sampledFraction = fraction;
+      progressFraction = Float.NaN;
+      sampledFrames++;
+      progressInsets = new android.view.WindowInsets.Builder(baseInsets)
+        .setInsets(android.view.WindowInsets.Type.ime(), ime)
+        .setVisible(android.view.WindowInsets.Type.ime(), ime.bottom > 0)
+        .build();
+      onAnimationStarted(sampledAnimation);
+      root.processWindowInsets(progressInsets, false);
+      if (!reportedFallback && fraction > 0f) {
+        reportedFallback = true;
+        android.util.Log.w("ImeAnimation",
+          "IME progress callbacks missing; following system fraction: root=" +
+          Integer.toHexString(System.identityHashCode(root)) + " duration=" +
+          sampledAnimation.getDurationMillis() + " from=" + from.bottom + " to=" + to.bottom);
+      }
+    }
+
     private void recoverAnimationInsets () {
       // Callbacks have stopped. The last progress may be an interrupted height;
       // recover from the current window instead of retaining deferred insets.
       animations.clear();
+      clearSampling();
       finalAppliedInsets = root.getRootWindowInsets();
       awaitingSettlement = true;
       settleInsets();
@@ -407,6 +519,7 @@ public class RootFrameLayout extends FrameLayoutFix {
       }
       awaitingSettlement = false;
       animationStarted = false;
+      clearSampling();
       skipAnimation = false;
       activeSkipAnimationDeadline = 0;
       pendingInsets = progressInsets = finalAppliedInsets = null;
@@ -912,6 +1025,9 @@ public class RootFrameLayout extends FrameLayoutFix {
 
   @Override
   protected void onMeasure (int widthMeasureSpec, int heightMeasureSpec) {
+    if (imeInsetsAnimation != null) {
+      imeInsetsAnimation.updateInsetsBeforeMeasure();
+    }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && hasInsets) {
       for (int i = 0; i < getChildCount(); i++) {
         View view = getChildAt(i);
