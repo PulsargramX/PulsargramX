@@ -140,6 +140,36 @@ class PublicSnapshotTest(unittest.TestCase):
     EXPORT.snapshot(self.root, self.destination, "HEAD")
     self.assertEqual(EXPORT.CHANGES.message_changes(git(self.destination, "log", "-1", "--format=%B")), [])
 
+  def test_public_snapshot_title_describes_client_changes(self):
+    EXPORT.snapshot(self.root, self.destination, "HEAD")
+    self.commit_file("app/src/main/java/ui/ForumTopicView.java", "topic previews",
+                     "Improve forum topic previews")
+    EXPORT.snapshot(self.root, self.destination, "HEAD")
+    self.assertEqual(git(self.destination, "log", "-1", "--format=%s").strip(),
+                     "Improve forum topic previews")
+
+  def test_maintenance_title_is_specific_without_adding_telegram_client_changes(self):
+    EXPORT.snapshot(self.root, self.destination, "HEAD")
+    self.commit_file("scripts/export.py", "specific fix", "Generate meaningful public snapshot titles")
+    EXPORT.snapshot(self.root, self.destination, "HEAD")
+    self.assertEqual(git(self.destination, "log", "-1", "--format=%s").strip(),
+                     "Generate meaningful public snapshot titles")
+    self.assertEqual(EXPORT.CHANGES.message_changes(git(self.destination, "log", "-1", "--format=%B")), [])
+
+  def test_sensitive_maintenance_subject_uses_a_neutral_title(self):
+    EXPORT.snapshot(self.root, self.destination, "HEAD")
+    self.commit_file("scripts/export.py", "specific fix", "Remove private identity from build output")
+    EXPORT.snapshot(self.root, self.destination, "HEAD", ("private identity",))
+    self.assertEqual(git(self.destination, "log", "-1", "--format=%s").strip(),
+                     "Update public build and release tooling")
+
+  def test_snapshot_titles_include_change_count_and_fit_the_length_limit(self):
+    self.assertEqual(EXPORT.snapshot_subject(["Fix keyboard animations", "Improve forum previews"]),
+                     "Fix keyboard animations (+1 more)")
+    title = EXPORT.snapshot_subject(["Improve " + "message previews " * 10, "Fix keyboard animations"])
+    self.assertLessEqual(len(title), 72)
+    self.assertTrue(title.endswith(" (+1 more)"))
+
   def test_client_build_and_test_files_do_not_count_as_runtime_changes(self):
     EXPORT.snapshot(self.root, self.destination, "HEAD")
     self.commit_file("tdlib/build.gradle.kts", "build fix", "Fix dependency build")

@@ -62,31 +62,49 @@ def source_baseline(root, destination, revision):
   return None
 
 
-def public_changes(root, destination, revision, patterns):
+def public_changes(root, destination, revision, patterns, client_only=True):
   changed = set(filter(None, git(destination, "diff", "--cached", "--name-only", "-z",
                                  "--no-renames").decode().split("\0")))
-  client_files = {name for name in changed if CHANGES.client_path(name)}
-  if not client_files:
+  selected = {name for name in changed if not client_only or CHANGES.client_path(name)}
+  if not selected:
     return []
   baseline = source_baseline(root, destination, revision)
   if not baseline:
-    return CHANGES.summarize_paths(client_files)
+    return summarize_changes(selected)
   commits = git(root, "rev-list", "--first-parent", "--reverse",
                 f"{baseline}..{revision}").decode().splitlines()
   changes = []
   for commit in commits:
     paths = set(filter(None, git(root, "diff", "--name-only", "--no-renames", "-z",
                                 f"{commit}^", commit).decode().split("\0")))
-    public_paths = paths & client_files
+    public_paths = paths & selected
     if not public_paths:
       continue
     subject = git(root, "show", "-s", "--format=%s", commit).decode().strip()
     mixed = any(AUDIT.local_path(name) for name in paths)
     safe = None if mixed else CHANGES.safe_subject(subject, (*patterns, *AUDIT.PRIVATE_KEYS))
-    for change in [safe] if safe else CHANGES.summarize_paths(public_paths):
+    for change in [safe] if safe else summarize_changes(public_paths):
       if change not in changes:
         changes.append(change)
-  return changes or CHANGES.summarize_paths(client_files)
+  return changes or summarize_changes(selected)
+
+
+def summarize_changes(paths):
+  changes = CHANGES.summarize_paths(paths)
+  if changes:
+    return changes
+  if all(name.endswith((".md", ".txt")) for name in paths):
+    return ["Update public project documentation"]
+  return ["Update public build and release tooling"]
+
+
+def snapshot_subject(changes):
+  suffix = f" (+{len(changes) - 1} more)" if len(changes) > 1 else ""
+  title = changes[0]
+  available = 72 - len(suffix)
+  if len(title) > available:
+    title = title[:available - 1].rsplit(" ", 1)[0] + "…"
+  return title + suffix
 
 
 def snapshot(root, destination, revision, patterns=()):
@@ -155,7 +173,8 @@ def snapshot(root, destination, revision, patterns=()):
   AUDIT.check_source(destination, patterns)
   if git(destination, "diff", "--cached", "--name-only").strip():
     changes = public_changes(root, destination, revision, patterns)
-    message = "Update shared client source\n\n" + CHANGES.HEADING + "\n"
+    titles = changes or public_changes(root, destination, revision, patterns, client_only=False)
+    message = snapshot_subject(titles) + "\n\n" + CHANGES.HEADING + "\n"
     message += "".join("- " + change + "\n" for change in changes)
     AUDIT.scan(message.encode(), (*patterns, *AUDIT.PRIVATE_KEYS), "public change descriptions")
     git(destination, "commit", "-F", "-", input=message.encode())
