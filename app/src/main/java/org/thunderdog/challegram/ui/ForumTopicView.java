@@ -27,8 +27,10 @@ import androidx.annotation.Nullable;
 
 import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
+import org.thunderdog.challegram.component.dialogs.ChatView;
 import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.core.Lang;
+import org.thunderdog.challegram.data.ChatListPreview;
 import org.thunderdog.challegram.data.ContentPreview;
 import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.loader.ComplexReceiver;
@@ -58,16 +60,19 @@ import org.thunderdog.challegram.util.text.Counter;
 import org.thunderdog.challegram.util.text.Highlight;
 import org.thunderdog.challegram.util.text.Text;
 import org.thunderdog.challegram.util.text.TextColorSets;
+import org.thunderdog.challegram.util.text.TextEntity;
 import org.thunderdog.challegram.util.text.TextMedia;
 import org.thunderdog.challegram.widget.BaseView;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import me.vkryl.android.util.SingleViewProvider;
 import me.vkryl.core.StringUtils;
+import me.vkryl.core.collection.IntList;
 import tgx.td.Td;
 
-public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watcher, TdlibStatusManager.HelperTarget, Text.TextMediaListener, ThemeInvalidateListener {
+public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watcher, TdlibStatusManager.HelperTarget, Text.TextMediaListener, ThemeInvalidateListener, ContentPreview.RefreshCallback {
   // Static cache for visible messages across all ForumTopicView instances
   private static final int MAX_CACHE_SIZE = 100;
   private static final Map<VisibleMessageCacheKey, TdApi.Message> globalVisibleMessageCache =
@@ -106,7 +111,6 @@ public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watche
   }
   
   private static TextPaint titlePaint;
-  private static TextPaint senderPaint;
   private static TextPaint previewPaint;
   private static TextPaint timePaint;
   private static Paint iconPaint;
@@ -126,7 +130,6 @@ public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watche
 
   private String titleText;
   private String senderText;
-  private String previewText;
   private String timeText;
   private Counter unreadCounter;
   private Counter reactionsCounter;
@@ -158,6 +161,10 @@ public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watche
   private Text displaySender;
   private Text displayPreview;
   private TdApi.FormattedText previewFormattedText;
+  private ContentPreview currentPreview;
+  private IntList previewIconIds;
+  private int previewIconColorId;
+  private final SingleViewProvider textViewProvider = new SingleViewProvider(this);
   
   // Message filtering support
   private TdApi.Message visibleMessage;
@@ -232,12 +239,6 @@ public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watche
       titlePaint.setColor(Theme.textAccentColor());
       ThemeManager.addThemeListener(titlePaint, ColorId.text);
 
-      senderPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
-      senderPaint.setTextSize(Screen.dp(15f));
-      senderPaint.setTypeface(Fonts.getRobotoRegular());
-      senderPaint.setColor(Theme.textAccentColor());
-      ThemeManager.addThemeListener(senderPaint, ColorId.text);
-
       previewPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
       previewPaint.setTextSize(Screen.dp(15f));
       previewPaint.setTypeface(Fonts.getRobotoRegular());
@@ -289,6 +290,7 @@ public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watche
     currentChatId = 0;
     currentLastMessageId = 0;
     topic = null;
+    currentPreview = null;
   }
 
   // TdlibStatusManager.HelperTarget implementation
@@ -350,6 +352,8 @@ public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watche
     displayTitle = null;
     displaySender = null;
     displayPreview = null;
+    currentPreview = null;
+    previewIconIds = null;
     
     // Check if this is a different topic or if last message changed
     long lastMessageId = topic.lastMessage != null ? topic.lastMessage.id : 0;
@@ -396,10 +400,7 @@ public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watche
       // Show draft preview
       this.showingDraft = true;
       TdApi.DraftMessageContentText draftText = (TdApi.DraftMessageContentText) topic.draftMessage.content;
-      String draftString = draftText.text != null && !StringUtils.isEmpty(draftText.text.text) ?
-        draftText.text.text : "";
       this.senderText = Lang.getString(R.string.Draft);
-      this.previewText = draftString;
       this.previewFormattedText = draftText.text;
       this.timeText = Lang.timeOrDateShort(topic.draftMessage.date, java.util.concurrent.TimeUnit.SECONDS);
       this.isOutgoing = false;
@@ -449,7 +450,6 @@ public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watche
           // Don't process the hidden message - show empty preview
           // This creates a brief blank state until the lookup completes
           this.senderText = "";
-          this.previewText = "";
           this.previewFormattedText = null;
           this.timeText = Lang.timeOrDateShort(topic.lastMessage.date, java.util.concurrent.TimeUnit.SECONDS);
           this.isOutgoing = false;
@@ -469,7 +469,6 @@ public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watche
     } else {
       this.showingDraft = false;
       this.senderText = "";
-      this.previewText = "";
       this.previewFormattedText = null;
       this.timeText = "";
       this.isOutgoing = false;
@@ -520,24 +519,40 @@ public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watche
   }
 
   private void setMessagePreview (TdApi.Message message) {
-    ContentPreview preview = ContentPreview.getChatListPreview(tdlib, topic.info.chatId, message, true);
-    TdApi.FormattedText formattedPreview = preview != null ? preview.buildFormattedText(false) : null;
-
-    if (message.isOutgoing) {
-      senderText = Lang.getString(R.string.FromYou);
-    } else {
-      String senderName = tdlib.senderName(message, false, false);
-      senderText = !StringUtils.isEmpty(senderName) ? senderName : "";
-    }
-    previewText = formattedPreview != null ? formattedPreview.text : "";
-    previewFormattedText = formattedPreview;
+    visibleMessage = message;
     timeText = Lang.timeOrDateShort(message.date, java.util.concurrent.TimeUnit.SECONDS);
     isOutgoing = message.isOutgoing;
     isSending = tdlib.messageSending(message);
     long relevantReadId = isOutgoing ? topic.lastReadOutboxMessageId : topic.lastReadInboxMessageId;
     isMessageUnread = message.id > relevantReadId;
-    isPreviewHighlighted = preview != null && preview.isHighlighted;
-    visibleMessage = message;
+    setContentPreview(ContentPreview.getChatListPreview(tdlib, topic.info.chatId, message, true));
+  }
+
+  private void setContentPreview (ContentPreview preview) {
+    currentPreview = preview;
+    previewFormattedText = preview.buildFormattedText(true);
+    senderText = !preview.hideAuthor ?
+      ChatListPreview.getSenderName(tdlib, visibleMessage, listMode) : null;
+    previewIconIds = ChatListPreview.getIconIds(preview, visibleMessage, !preview.hideAuthor);
+    previewIconColorId = ChatListPreview.getIconColorId(visibleMessage, !preview.hideAuthor);
+    isPreviewHighlighted = preview.isHighlighted;
+    if (preview.hasRefresher()) {
+      preview.refreshContent(this);
+    }
+  }
+
+  @Override
+  public void onContentPreviewChanged (long chatId, long messageId, ContentPreview newPreview,
+                                       ContentPreview oldPreview) {
+    UI.post(() -> {
+      if (topic != null && currentPreview == oldPreview && !showingDraft) {
+        setContentPreview(newPreview);
+        if (lastMeasuredWidth > 0) {
+          buildTextLayouts();
+        }
+        invalidate();
+      }
+    });
   }
 
   private int lastMeasuredWidth;
@@ -631,21 +646,15 @@ public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watche
     
     int previewAvailWidth = textRight - textLeft - previewReservedWidth;
     
-    // Ensure minimum available widths
-    int minWidth = Screen.dp(80f); // Reduced from 100dp to allow more flexibility
-    if (titleAvailWidth < minWidth) {
-      titleAvailWidth = minWidth;
-    }
-    if (previewAvailWidth < minWidth) {
-      previewAvailWidth = minWidth;
-    }
+    // Keep text inside the available space beside the time and badges.
+    titleAvailWidth = Math.max(0, titleAvailWidth);
+    previewAvailWidth = Math.max(0, previewAvailWidth);
 
     // Determine font sizes based on chat list mode (matching ChatView pattern)
     float titleFontSize = listMode == Settings.CHAT_MODE_3LINE ? 16f : 17f;
-    float textFontSize = listMode == Settings.CHAT_MODE_3LINE ? 15f : 16f;
 
     // Build title Text with emoji support - use titleAvailWidth for more space
-    if (!StringUtils.isEmpty(titleText)) {
+    if (titleAvailWidth > 0 && !StringUtils.isEmpty(titleText)) {
       Highlight highlight = !StringUtils.isEmpty(highlightQuery) ? Highlight.valueOf(titleText, highlightQuery) : null;
       displayTitle = new Text.Builder(
         titleText,
@@ -661,93 +670,18 @@ public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watche
       displayTitle = null;
     }
 
-    // In 2-line mode, keep the prefix separate so it can use the same color as ChatView drafts.
-    if (listMode == Settings.CHAT_MODE_2LINE) {
-      boolean hasSender = !StringUtils.isEmpty(senderText);
-      boolean hasPreview = !StringUtils.isEmpty(previewText);
-      if (hasSender) {
-        displaySender = new Text.Builder(
-          senderText,
-          Math.min(previewAvailWidth, Screen.dp(120f)),
-          Paints.robotoStyleProvider(textFontSize),
-          showingDraft ? TextColorSets.Regular.NEGATIVE : TextColorSets.Regular.NORMAL
-        ).singleLine()
-         .ignoreNewLines()
-         .suffix(hasPreview ? ": " : null)
-         .build();
-      } else {
-        displaySender = null;
-      }
-
-      int textAvailWidth = previewAvailWidth - (displaySender != null ? displaySender.getWidth() : 0);
-      if (previewFormattedText != null && hasPreview && textAvailWidth > 0) {
-        displayPreview = new Text.Builder(
-          tdlib,
-          previewFormattedText,
-          null, // urlOpenParameters
-          textAvailWidth,
-          Paints.robotoStyleProvider(textFontSize),
-          TextColorSets.Regular.LIGHT,
-          this // textMediaListener for custom emoji loading
-        ).singleLine()
-         .ignoreNewLines()
-         .noClickable() // Disable link highlighting in chat list preview (consistent with TGChat)
-         .build();
-      } else if (hasPreview && textAvailWidth > 0) {
-        displayPreview = new Text.Builder(
-          previewText,
-          textAvailWidth,
-          Paints.robotoStyleProvider(textFontSize),
-          TextColorSets.Regular.LIGHT
-        ).singleLine()
-         .ignoreNewLines()
-         .build();
-      } else {
-        displayPreview = null;
-      }
-    } else {
-      // 3-line mode: separate sender and preview lines
-      // Build sender Text with emoji support (4-parameter constructor for String)
-      if (!StringUtils.isEmpty(senderText)) {
-        displaySender = new Text.Builder(
-          senderText,
-          previewAvailWidth,  // Use preview-specific width (sender is on preview line area)
-          Paints.robotoStyleProvider(textFontSize),
-          showingDraft ? TextColorSets.Regular.NEGATIVE : TextColorSets.Regular.NORMAL
-        ).singleLine()
-         .ignoreNewLines()
-         .build();
-      } else {
-        displaySender = null;
-      }
-
-      // Build preview Text with custom emoji support
-      if (previewFormattedText != null && !StringUtils.isEmpty(previewFormattedText.text)) {
-        displayPreview = new Text.Builder(
-          tdlib,
-          previewFormattedText,
-          null, // urlOpenParameters
-          previewAvailWidth,  // Use preview-specific width
-          Paints.robotoStyleProvider(textFontSize),
-          TextColorSets.Regular.LIGHT,
-          this // textMediaListener for custom emoji loading
-        ).singleLine()
-         .ignoreNewLines()
-         .noClickable() // Disable link highlighting in chat list preview (consistent with TGChat)
-         .build();
-      } else if (!StringUtils.isEmpty(previewText)) {
-        displayPreview = new Text.Builder(
-          previewText,
-          previewAvailWidth,  // Use preview-specific width
-          Paints.robotoStyleProvider(textFontSize),
-          TextColorSets.Regular.LIGHT
-        ).singleLine()
-         .ignoreNewLines()
-         .build();
-      } else {
-        displayPreview = null;
-      }
+    boolean hasPreview = previewFormattedText != null &&
+      !StringUtils.isEmpty(previewFormattedText.text);
+    displaySender = ChatListPreview.buildPrefix(senderText, previewAvailWidth, listMode,
+      showingDraft, !showingDraft || hasPreview);
+    int textAvailWidth = previewAvailWidth;
+    if (listMode == Settings.CHAT_MODE_2LINE && displaySender != null) {
+      textAvailWidth -= displaySender.getWidth();
     }
+    displayPreview = hasPreview ? ChatListPreview.buildText(previewFormattedText.text,
+      TextEntity.valueOf(tdlib, previewFormattedText.text, previewFormattedText.entities, null),
+      textAvailWidth, listMode, !StringUtils.isEmpty(senderText), previewIconIds,
+      textViewProvider, this) : null;
 
     // Request text media for custom emoji
     requestTextMedia();
@@ -1057,21 +991,8 @@ public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watche
       rightOffset += Screen.dp(18f); // Space for mute icon
     }
 
-    // Calculate Y positions based on chat list mode (matching ChatView exactly)
-    int titleTop, textTop;
-    if (listMode == Settings.CHAT_MODE_2LINE) {
-      // 2-line mode
-      titleTop = Screen.dp(12f);  // getTitleTop2 for 2-line
-      textTop = Screen.dp(39.5f); // getTextTop for 2-line (baseline position)
-    } else if (listMode == Settings.CHAT_MODE_3LINE_BIG) {
-      // 3-line big mode
-      titleTop = Screen.dp(10f);  // getTitleTop2 for 3-line modes
-      textTop = Screen.dp(33f);   // getTextTop for 3-line big
-    } else {
-      // 3-line normal mode (default)
-      titleTop = Screen.dp(10f);  // getTitleTop2 for 3-line modes
-      textTop = Screen.dp(32f);   // getTextTop for 3-line
-    }
+    int titleTop = Screen.dp(listMode == Settings.CHAT_MODE_2LINE ? 12f : 10f);
+    int textTop = ChatView.getTextTop(listMode);
 
     // Draw title with emoji support
     int titleRight = (int) (textRight - rightOffset);
@@ -1146,45 +1067,9 @@ public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watche
         String ellipsizedTyping = TextUtils.ellipsize(typingText, previewPaint, previewRight - textLeft - iconWidth, TextUtils.TruncateAt.END).toString();
         canvas.drawText(ellipsizedTyping, textLeft + iconWidth, top - previewPaint.ascent(), previewPaint);
       }
-    } else if (listMode == Settings.CHAT_MODE_2LINE) {
-      // 2-line mode: draw the colored prefix and light preview as separate text layouts.
-      int previewLeft = textLeft;
-      if (displaySender != null) {
-        displaySender.draw(canvas, previewLeft, textTop);
-        previewLeft += displaySender.getWidth();
-      }
-      if (displayPreview != null) {
-        displayPreview.draw(canvas, previewLeft, textTop, null, 1f, textMediaReceiver);
-      }
     } else {
-      // 3-line mode: Draw sender and preview on separate lines (matching ChatView logic)
-      int currentTextTop = textTop;
-      
-      // Draw sender (prefix in ChatView terminology)
-      if (displaySender != null) {
-        displaySender.draw(canvas, textLeft, currentTextTop, null, 1f);
-        // Move to next line position
-        currentTextTop += displaySender.getNextLineHeight();
-      } else if (!StringUtils.isEmpty(senderText)) {
-        // Fallback: draw simple text and estimate line height
-        if (showingDraft) {
-          int savedColor = senderPaint.getColor();
-          senderPaint.setColor(Theme.textRedColor());
-          String ellipsizedSender = TextUtils.ellipsize(senderText, senderPaint, previewRight - textLeft, TextUtils.TruncateAt.END).toString();
-          canvas.drawText(ellipsizedSender, textLeft, currentTextTop + Screen.dp(14f), senderPaint);
-          senderPaint.setColor(savedColor);
-        } else {
-          String ellipsizedSender = TextUtils.ellipsize(senderText, senderPaint, previewRight - textLeft, TextUtils.TruncateAt.END).toString();
-          canvas.drawText(ellipsizedSender, textLeft, currentTextTop + Screen.dp(14f), senderPaint);
-        }
-        // Estimate line height for simple text (approximately 18dp for 15sp font)
-        currentTextTop += Screen.dp(18f);
-      }
-
-      // Draw message preview on the next line
-      if (displayPreview != null) {
-        displayPreview.draw(canvas, textLeft, currentTextTop, null, 1f, textMediaReceiver);
-      }
+      ChatListPreview.draw(canvas, listMode, textLeft, textTop, width, false, 1f,
+        displaySender, displayPreview, previewIconIds, previewIconColorId, textMediaReceiver, this);
     }
 
     // Draw separator line at bottom
@@ -1334,6 +1219,9 @@ public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watche
     // Validate that this callback is for the current topic's text
     // If the view was recycled, the displayPreview reference will be different
     if (text == displayPreview && topic != null) {
+      if (!text.invalidateMediaContent(textMediaReceiver, specificMedia)) {
+        text.requestMedia(textMediaReceiver);
+      }
       invalidate();
     }
   }

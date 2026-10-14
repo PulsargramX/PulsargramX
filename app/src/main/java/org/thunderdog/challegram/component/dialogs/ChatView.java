@@ -31,6 +31,7 @@ import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.data.AvatarPlaceholder;
+import org.thunderdog.challegram.data.ChatListPreview;
 import org.thunderdog.challegram.data.TGChat;
 import org.thunderdog.challegram.loader.AvatarReceiver;
 import org.thunderdog.challegram.loader.ComplexReceiver;
@@ -69,7 +70,6 @@ import me.vkryl.android.AnimatorUtils;
 import me.vkryl.android.animator.BoolAnimator;
 import me.vkryl.android.util.InvalidateContentProvider;
 import me.vkryl.core.ColorUtils;
-import me.vkryl.core.collection.IntList;
 import tgx.td.ChatPosition;
 
 public class ChatView extends BaseView implements TdlibSettingsManager.PreferenceChangeListener, InvalidateContentProvider, EmojiStatusHelper.EmojiStatusReceiverInvalidateDelegate, TdlibUi.MessageProvider {
@@ -287,10 +287,6 @@ public class ChatView extends BaseView implements TdlibSettingsManager.Preferenc
       default:
         return Screen.dp(39.5f);
     }
-  }
-
-  private static int getSingleLineOffset (int chatListMode) {
-    return Screen.dp(chatListMode == Settings.CHAT_MODE_3LINE ? 2f : 2f);
   }
 
   public static int getTitleTop (int chatListMode) {
@@ -689,40 +685,9 @@ public class ChatView extends BaseView implements TdlibSettingsManager.Preferenc
         saveCount = -1;
       }
 
-      int textTop = getTextTop(chatListMode);
-      Text prefix = chat.getPrefix();
-      if (prefix != null) {
-        int titleColor = ColorUtils.alphaColor(textAlpha, chat.showDraft() ? Theme.textRedColor() : Theme.textAccentColor());
-        prefix.draw(c, getLeftPadding(chatListMode), textTop, null, textAlpha);
-      }
-      Text text = chat.getText();
-      if (text != null) {
-        if (chatListMode != Settings.CHAT_MODE_2LINE) {
-          if (prefix != null) {
-            textTop += prefix.getNextLineHeight();
-          } else if (text.getLineCount() == 1) {
-            textTop += getSingleLineOffset(chatListMode);
-          }
-        }
-        IntList prefixIcons = chat.getTextIconIds();
-        if (prefixIcons != null) {
-          int x = chat.getTextLeft();
-          for (int i = 0; i < prefixIcons.size(); i++) {
-            Paint paint = PorterDuffPaint.get(chat.getTextIconColorId(), textAlpha);
-            int iconId = prefixIcons.get(i);
-            Drawable d = getSparseDrawable(iconId, ColorId.NONE);
-            int y = textTop + text.getLineHeight(false) / 2 - d.getMinimumHeight() / 2;
-            if (iconId == R.drawable.baseline_camera_alt_16) {
-              y += Screen.dp(.5f);
-            }
-            Drawables.drawRtl(c, d, x, y, paint, viewWidth, rtl);
-            x += Screen.dp(18f); //  + d.getMinimumWidth();
-
-          }
-        }
-
-        text.draw(c, chat.getTextLeft(), textTop, null, textAlpha, textMediaReceiver);
-      }
+      ChatListPreview.draw(c, chatListMode, getLeftPadding(chatListMode),
+        getTextTop(chatListMode), viewWidth, rtl, textAlpha, chat.getPrefix(), chat.getText(),
+        chat.getTextIconIds(), chat.getTextIconColorId(), textMediaReceiver, this);
 
       if (needRestore) {
         Views.restore(c, saveCount);
@@ -733,7 +698,7 @@ public class ChatView extends BaseView implements TdlibSettingsManager.Preferenc
       if (text != null) {
         float top = getTextTop(chatListMode) - Screen.dp(14f) * textAlpha;
         if (chatListMode != Settings.CHAT_MODE_2LINE && text.getLineCount() == 1) {
-          top += getSingleLineOffset(chatListMode);
+          top += ChatListPreview.getSingleLineOffset();
         }
         DrawAlgorithms.drawStatus(c, state, rtl ? viewWidth - getLeftPadding(chatListMode) : getLeftPadding(chatListMode), top + text.getLineHeight() / 2f, ColorUtils.alphaColor(statusVisibility, text.getTextColor()), this, statusVisibility == 1f ? ColorId.textLight : ColorId.NONE);
         int x = getLeftPadding(chatListMode);

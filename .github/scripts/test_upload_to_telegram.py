@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import importlib.util
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -16,75 +17,95 @@ UPLOAD = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UPLOAD)
 
 
-class CommitSubjectsTest(unittest.TestCase):
+class ReleaseChangesTest(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
         self.repository = Path(self.temp_dir.name)
         self.git("init", "--initial-branch=main")
         self.git("config", "user.name", "Test")
         self.git("config", "user.email", "test@example.com")
-
-    def tearDown(self):
-        self.temp_dir.cleanup()
+        self.git("config", "commit.gpgsign", "false")
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.object(UPLOAD, "REPOSITORY_ROOT", self.repository).start()
+        mock.patch.dict(os.environ, {"GITHUB_SHA": "HEAD", "GITHUB_EVENT_PATH": ""}).start()
 
     def git(self, *arguments):
         return subprocess.check_output(
-            ["git", *arguments],
-            cwd=self.repository,
-            text=True,
+            ["git", *arguments], cwd=self.repository, text=True,
         ).strip()
 
-    def commit(self, subject):
-        tracked_file = self.repository / "history.txt"
-        with tracked_file.open("a", encoding="utf-8") as history:
-            history.write(f"{subject}\n")
-        self.git("add", "history.txt")
-        self.git("commit", "--message", subject)
+    def commit(self, subject, changes=None, path=None):
+        if path:
+            tracked = self.repository / path
+            tracked.parent.mkdir(parents=True, exist_ok=True)
+            with tracked.open("a") as history:
+                history.write("change\n")
+            self.git("add", path)
+        message = subject
+        if changes is not None:
+            message += "\n\nPublic client changes:\n" + "".join("- " + c + "\n" for c in changes)
+        self.git("commit", "--allow-empty", "--message", message)
         return self.git("rev-parse", "HEAD")
 
-    def test_uses_all_commits_since_success_marker(self):
-        self.commit("Published build")
+    def test_uses_all_exported_changes_since_success_and_deduplicates(self):
+        self.commit("Published snapshot", ["Earlier public fix"])
         self.git("tag", "telegram-last-success")
-        self.commit("First unpublished change")
-        current_commit = self.commit("Fix failed build")
+        self.commit("Update shared client source", ["Fix keyboard animation"])
+        self.commit("Update shared client source", [])
+        self.commit("Update shared client source", ["Fix keyboard animation", "Improve topic previews"])
+        self.assertEqual(UPLOAD.get_release_changes(),
+                         ["Fix keyboard animation", "Improve topic previews"])
 
-        with mock.patch.object(UPLOAD, "REPOSITORY_ROOT", self.repository):
-            subjects = UPLOAD.subjects_since_last_success(current_commit)
-
-        self.assertEqual(
-            subjects,
-            ["First unpublished change", "Fix failed build"],
-        )
-
-    def test_empty_range_does_not_fall_back_to_push_event(self):
-        current_commit = self.commit("Published build")
+    def test_republishing_same_commit_has_no_changes(self):
+        self.commit("Published snapshot", ["Earlier public fix"])
         self.git("tag", "telegram-last-success")
+        self.assertEqual(UPLOAD.get_release_changes(), [])
 
-        with (
-            mock.patch.object(UPLOAD, "REPOSITORY_ROOT", self.repository),
-            mock.patch.dict(os.environ, {"GITHUB_SHA": current_commit}),
-            mock.patch.object(UPLOAD, "subjects_from_event") as event_subjects,
-        ):
-            subjects = UPLOAD.get_commit_subjects()
+    def test_build_only_snapshots_do_not_add_changes(self):
+        self.commit("Published snapshot")
+        self.git("tag", "telegram-last-success")
+        self.commit("Fix CI configuration", [], ".github/workflows/build.yml")
+        self.assertEqual(UPLOAD.get_release_changes(), [])
 
-        self.assertEqual(subjects, [])
-        event_subjects.assert_not_called()
+    def test_legacy_snapshots_are_summarized_without_subjects_or_private_files(self):
+        self.commit("Published snapshot")
+        self.git("tag", "telegram-last-success")
+        self.commit("Update shared client source", path="app/src/main/java/widget/RootFrameLayout.java")
+        self.commit("Personal customization", path=".personal/java/ClientPolicy.java")
+        self.commit("Private build detail", path="scripts/build.py")
+        self.assertEqual(UPLOAD.get_release_changes(), ["Improve keyboard and input panel behavior"])
 
-    def test_falls_back_to_push_event_without_marker(self):
-        current_commit = self.commit("Current change")
+    def test_first_push_uses_event_baseline_without_success_marker(self):
+        before = self.commit("Published snapshot", ["Earlier public fix"])
+        self.commit("Update shared client source", ["Improve topic previews"])
+        event = self.repository / "event.json"
+        event.write_text(json.dumps({"before": before,
+                                    "commits": [{"message": "Personal-only customization"}]}))
+        with mock.patch.dict(os.environ, {"GITHUB_EVENT_PATH": str(event)}):
+            self.assertEqual(UPLOAD.get_release_changes(), ["Improve topic previews"])
 
-        with (
-            mock.patch.object(UPLOAD, "REPOSITORY_ROOT", self.repository),
-            mock.patch.dict(os.environ, {"GITHUB_SHA": current_commit}),
-            mock.patch.object(
-                UPLOAD,
-                "subjects_from_event",
-                return_value=["Current change"],
-            ),
-        ):
-            subjects = UPLOAD.get_commit_subjects()
+    def test_no_baseline_uses_current_snapshot(self):
+        self.commit("Old snapshot", ["Earlier public fix"])
+        self.commit("Update shared client source", ["Improve topic previews"])
+        self.assertEqual(UPLOAD.get_release_changes(), ["Improve topic previews"])
 
-        self.assertEqual(subjects, ["Current change"])
+    def test_success_marker_takes_priority_over_push_baseline(self):
+        self.commit("Published snapshot", ["Earlier public fix"])
+        self.git("tag", "telegram-last-success")
+        before = self.commit("Failed publication", ["Fix keyboard animation"])
+        self.commit("Retry publication", [])
+        event = self.repository / "event.json"
+        event.write_text(json.dumps({"before": before}))
+        with mock.patch.dict(os.environ, {"GITHUB_EVENT_PATH": str(event)}):
+            self.assertEqual(UPLOAD.get_release_changes(), ["Fix keyboard animation"])
+
+    def test_ignores_message_body_outside_exported_section(self):
+        self.commit("Published snapshot")
+        self.git("tag", "telegram-last-success")
+        self.commit("Private title\n\nPrivate implementation details\n- Private feature\n",
+                    ["Improve topic previews"])
+        self.assertEqual(UPLOAD.get_release_changes(), ["Improve topic previews"])
 
 
 class UploadConfigurationTest(unittest.TestCase):
@@ -113,12 +134,19 @@ class UploadConfigurationTest(unittest.TestCase):
         with self.assertRaisesRegex(UPLOAD.ConfigurationError, "Missing repository secrets"):
             UPLOAD.upload_configuration({})
 
+    def test_caption_shows_public_changes_and_handles_republication(self):
+        self.assertEqual(
+            UPLOAD.build_caption("0.1817", ["Fix keyboard animation"], 1024),
+            "🔨 New Build\nPulsargram X v0.1817\n\nChanges:\n- Fix keyboard animation",
+        )
+        self.assertIn("No new client changes.", UPLOAD.build_caption("0.1817", [], 1024))
+
     def test_caption_fits_telegram_limit_with_astral_emoji(self):
         subjects = ["Feature " + "🚀" * 10] * 50
         caption = UPLOAD.build_caption("1.2", subjects, 1024)
         self.assertLessEqual(len(caption.encode("utf-16-le")) // 2, 1024)
         self.assertIn("And more!", caption)
-        self.assertTrue(caption.startswith("Pulsargram X"))
+        self.assertTrue(caption.startswith("🔨 New Build\nPulsargram X"))
 
 
 class UploadLifecycleTest(unittest.IsolatedAsyncioTestCase):

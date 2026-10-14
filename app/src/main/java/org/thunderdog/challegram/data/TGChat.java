@@ -1204,17 +1204,9 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
       textLeft += prefixWidth;
     }
 
-    this.textIconsPadding = textIconIds != null && textIconIds.size() > 0 ? Screen.dp(2f) + Screen.dp(18f) * textIconIds.size() : 0;
-
     if (avail > 0 && !StringUtils.isEmpty(text)) {
-      trimmedText = new Text.Builder(text, avail, getTextStyleProvider(listMode), TextColorSets.Regular.LIGHT)
-        .maxLineCount(isSingleLine() ? 1 : 2)
-        .textFlags(Text.FLAG_ELLIPSIZE_NEWLINE)
-        .ignoreContinuousNewLines()
-        .ignoreNewLines(isSingleLine())
-        .lineMarginProvider((lineIndex, y, defaultMaxWidth, lineHeight) -> lineIndex == 0 ? textIconsPadding : 0)
-        .viewProvider(currentViews)
-        .entities(entities, (text, specificMedia) -> {
+      trimmedText = ChatListPreview.buildText(text, entities, avail, listMode,
+        (flags & FLAG_HAS_PREFIX) != 0, textIconIds, currentViews, (text, specificMedia) -> {
           if (this.trimmedText == text) {
             for (View view : currentViews) {
               ComplexReceiver receiver = ((ChatView) view).getTextMediaReceiver();
@@ -1223,9 +1215,7 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
               }
             }
           }
-        })
-        .noClickable()
-        .build();
+        });
       currentViews.invalidateContent(this);
     } else {
       trimmedText = null;
@@ -1234,10 +1224,8 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
     layoutChatAction();
   }
 
-  private int textIconsPadding;
-
   private static TextStyleProvider getTextStyleProvider (int chatListMode) {
-    return Paints.robotoStyleProvider(chatListMode == Settings.CHAT_MODE_3LINE ? 15 : 16);
+    return ChatListPreview.getTextStyleProvider(chatListMode);
   }
 
   private static TextStyleProvider getTitleStyleProvider (int chatListMode) {
@@ -1263,12 +1251,10 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
         prefix = Lang.getString(R.string.Draft);
         flags |= FLAG_CONTENT_STRING;
       } else if (isOutgoing()) {
-        prefix = Lang.getString(listMode != Settings.CHAT_MODE_2LINE && tdlib.isMultiChat(chat) && Td.getSenderId(chat.lastMessage) == chat.id ? R.string.FromYouAnonymous : R.string.FromYou);
+        prefix = ChatListPreview.getSenderName(tdlib, chat.lastMessage, listMode);
         flags |= FLAG_CONTENT_STRING;
-      } else if (chat.lastMessage != null && !Td.isProximityAlertTriggered(chat.lastMessage.content)) {
-        prefix = listMode == Settings.CHAT_MODE_2LINE && Td.getMessageAuthorId(chat.lastMessage) == chat.lastMessage.chatId && StringUtils.isEmpty(chat.lastMessage.authorSignature) ?
-          Lang.getString(R.string.FromAnonymous) :
-          tdlib.senderName(chat.lastMessage, false, listMode == Settings.CHAT_MODE_2LINE);
+      } else if (chat.lastMessage != null) {
+        prefix = ChatListPreview.getSenderName(tdlib, chat.lastMessage, listMode);
       } else {
         prefix = null;
       }
@@ -1280,17 +1266,8 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
         } else {
           avail = Screen.dp(120f);
         }
-        if (avail > 0) {
-          Text.Builder b = new Text.Builder(prefix, avail, getTextStyleProvider(listMode), BitwiseUtils.hasFlag(flags, FLAG_TEXT_DRAFT) ? TextColorSets.Regular.NEGATIVE : TextColorSets.Regular.NORMAL)
-            .singleLine()
-            .textFlags(Text.FLAG_ELLIPSIZE_NO_FILL);
-          if (needSuffix && listMode == Settings.CHAT_MODE_2LINE) {
-            b.suffix(": ");
-          }
-          this.prefix = b.build();
-        } else {
-          this.prefix = null;
-        }
+        this.prefix = ChatListPreview.buildPrefix(prefix, avail, listMode,
+          BitwiseUtils.hasFlag(flags, FLAG_TEXT_DRAFT), needSuffix);
       } else {
         this.prefix = null;
       }
@@ -1306,10 +1283,6 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
 
   private void setTextValue (String text, boolean isTranslatable) {
     setTextValue(text, (TextEntity[]) null, isTranslatable);
-  }
-
-  private boolean isSingleLine () {
-    return listMode == Settings.CHAT_MODE_2LINE || (flags & FLAG_HAS_PREFIX) != 0;
   }
 
   private void setTextValue (String text, TextEntity[] entities, boolean isTranslatable) {
@@ -1531,67 +1504,17 @@ public class TGChat implements TdlibStatusManager.HelperTarget, ContentPreview.R
     return visibleMessage;
   }
 
-  private void addIcon (int icon) {
-    if (icon != 0) {
-      if (textIconIds == null)
-        textIconIds = new IntList(2);
-      textIconIds.append(icon);
-    }
-  }
-
   private void setContentPreview (ContentPreview preview) {
-    if (textIconIds != null)
-      textIconIds.clear();
-    setTextValue(preview.buildText(true), preview.formattedText != null ? preview.formattedText.entities : null, preview.isTranslatable);
+    TdApi.FormattedText formattedText = preview.buildFormattedText(true);
+    setTextValue(formattedText.text, formattedText.entities, preview.isTranslatable);
     this.currentPreview = preview;
     TdApi.Message lastMessage = chat != null ? chat.lastMessage : null;
-    if (preview.parentEmoji != null) {
-      addIcon(preview.parentEmoji.iconRepresentation);
-    } else if (lastMessage != null && (lastMessage.isChannelPost || getPrefixIconCount() == 0)) {
-      boolean needShareIcon = false;
-      if (lastMessage.forwardInfo != null) {
-        TdApi.MessageOrigin origin = lastMessage.forwardInfo.origin;
-        switch (origin.getConstructor()) {
-          case TdApi.MessageOriginChannel.CONSTRUCTOR:
-            needShareIcon = chat.id != ((TdApi.MessageOriginChannel) origin).chatId;
-            break;
-          case TdApi.MessageOriginHiddenUser.CONSTRUCTOR:
-            needShareIcon = true;
-            break;
-          case TdApi.MessageOriginUser.CONSTRUCTOR:
-            needShareIcon = Td.getSenderUserId(chat.lastMessage) != ((TdApi.MessageOriginUser) origin).senderUserId;
-            break;
-          case TdApi.MessageOriginChat.CONSTRUCTOR:
-            needShareIcon = Td.getSenderId(chat.lastMessage) != ((TdApi.MessageOriginChat) origin).senderChatId;
-            break;
-          default:
-            Td.assertMessageOrigin_f2224a59();
-            throw Td.unsupported(origin);
-        }
-      }
-      if (needShareIcon) {
-        addIcon(R.drawable.baseline_share_arrow_16);
-      } else if (lastMessage.importInfo != null) {
-        addIcon(R.drawable.templarian_baseline_import_16);
-      } else if (lastMessage.replyTo != null && lastMessage.replyTo.getConstructor() == TdApi.MessageReplyToMessage.CONSTRUCTOR) {
-        TdApi.MessageReplyToMessage replyToMessage = (TdApi.MessageReplyToMessage) lastMessage.replyTo;
-        if (replyToMessage.chatId != lastMessage.chatId) {
-          addIcon(R.drawable.baseline_reply_16);
-        }
-      }
-    }
-    if (preview.emoji != null) {
-      addIcon(preview.emoji.iconRepresentation);
-    }
-    this.textIconColorId = ColorId.chatListIcon;
+    boolean hasAuthor = (isGroup() || isSupergroup()) && !preview.hideAuthor;
+    textIconIds = ChatListPreview.getIconIds(preview, lastMessage, hasAuthor);
+    textIconColorId = ChatListPreview.getIconColorId(lastMessage, hasAuthor);
 
-    if ((isGroup() || isSupergroup()) && !preview.hideAuthor) {
+    if (hasAuthor) {
       flags |= FLAG_HAS_PREFIX;
-    } else if (chat.lastMessage != null && Td.isCall(chat.lastMessage.content)) {
-      if (textIconIds != null)
-        textIconIds.clear();
-      addIcon(CallItem.getSubtitleIcon((TdApi.MessageCall) chat.lastMessage.content, TD.isOut(chat.lastMessage)));
-      textIconColorId = CallItem.getSubtitleIconColorId((TdApi.MessageCall) chat.lastMessage.content);
     }
 
     setPrefix();

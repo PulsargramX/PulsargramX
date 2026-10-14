@@ -3,6 +3,7 @@
 
 import argparse
 import importlib.util
+import json
 import os
 from pathlib import Path
 import shlex
@@ -14,6 +15,10 @@ ROOT = Path(__file__).resolve().parent.parent
 SPEC = importlib.util.spec_from_file_location("public_audit", ROOT / "scripts/verify-public.py")
 AUDIT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(AUDIT)
+CHANGE_SPEC = importlib.util.spec_from_file_location(
+  "public_changelog", ROOT / "scripts/public_changelog.py")
+CHANGES = importlib.util.module_from_spec(CHANGE_SPEC)
+CHANGE_SPEC.loader.exec_module(CHANGES)
 
 
 def git(root, *args, input=None):
@@ -23,6 +28,65 @@ def git(root, *args, input=None):
     environment.pop(name, None)
   return subprocess.check_output(["git", "-C", str(root), *args], input=input,
                                  stderr=subprocess.PIPE, env=environment)
+
+
+def exported_entries(root, revision):
+  entries = git(root, "ls-tree", "-rz", "--full-tree", revision).split(b"\0")
+  return {entry.split(b"\t", 1)[1]: entry.split(b"\t", 1)[0]
+          for entry in filter(None, entries)
+          if not AUDIT.local_path(entry.split(b"\t", 1)[1].decode())}
+
+
+def source_baseline(root, destination, revision):
+  """Keep private revision mapping in .git; migrate old exports by matching their tree."""
+  try:
+    public_head = git(destination, "rev-parse", "--verify", "HEAD").decode().strip()
+  except subprocess.CalledProcessError:
+    return None
+  state = destination / ".git/public-export-state.json"
+  if state.is_file():
+    saved = json.loads(state.read_text())
+    if saved.get("public") == public_head:
+      baseline = saved["source"]
+      try:
+        git(root, "merge-base", "--is-ancestor", baseline, revision)
+        return baseline
+      except subprocess.CalledProcessError:
+        pass
+  # Older exports have no mapping. Compare blobs/gitlinks without copying source history.
+  exported = exported_entries(destination, public_head)
+  ancestors = git(root, "rev-list", "--first-parent", "--max-count=200", revision).decode().splitlines()
+  for candidate in ancestors:
+    if exported_entries(root, candidate) == exported:
+      return candidate
+  return None
+
+
+def public_changes(root, destination, revision, patterns):
+  changed = set(filter(None, git(destination, "diff", "--cached", "--name-only", "-z",
+                                 "--no-renames").decode().split("\0")))
+  client_files = {name for name in changed if CHANGES.client_path(name)}
+  if not client_files:
+    return []
+  baseline = source_baseline(root, destination, revision)
+  if not baseline:
+    return CHANGES.summarize_paths(client_files)
+  commits = git(root, "rev-list", "--first-parent", "--reverse",
+                f"{baseline}..{revision}").decode().splitlines()
+  changes = []
+  for commit in commits:
+    paths = set(filter(None, git(root, "diff", "--name-only", "--no-renames", "-z",
+                                f"{commit}^", commit).decode().split("\0")))
+    public_paths = paths & client_files
+    if not public_paths:
+      continue
+    subject = git(root, "show", "-s", "--format=%s", commit).decode().strip()
+    mixed = any(AUDIT.local_path(name) for name in paths)
+    safe = None if mixed else CHANGES.safe_subject(subject, (*patterns, *AUDIT.PRIVATE_KEYS))
+    for change in [safe] if safe else CHANGES.summarize_paths(public_paths):
+      if change not in changes:
+        changes.append(change)
+  return changes or CHANGES.summarize_paths(client_files)
 
 
 def snapshot(root, destination, revision, patterns=()):
@@ -90,8 +154,15 @@ def snapshot(root, destination, revision, patterns=()):
     git(destination, "update-index", "--add", "--cacheinfo", f"{mode},{oid},{name}")
   AUDIT.check_source(destination, patterns)
   if git(destination, "diff", "--cached", "--name-only").strip():
-    git(destination, "commit", "-m", "Update shared client source")
+    changes = public_changes(root, destination, revision, patterns)
+    message = "Update shared client source\n\n" + CHANGES.HEADING + "\n"
+    message += "".join("- " + change + "\n" for change in changes)
+    AUDIT.scan(message.encode(), (*patterns, *AUDIT.PRIVATE_KEYS), "public change descriptions")
+    git(destination, "commit", "-F", "-", input=message.encode())
   AUDIT.check_history(destination, patterns)
+  state = {"source": git(root, "rev-parse", revision).decode().strip(),
+           "public": git(destination, "rev-parse", "HEAD").decode().strip()}
+  (destination / ".git/public-export-state.json").write_text(json.dumps(state) + "\n")
   return destination
 
 

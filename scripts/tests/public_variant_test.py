@@ -70,6 +70,103 @@ class PublicSnapshotTest(unittest.TestCase):
     self.assertEqual((self.destination / "README.md").read_text(), "One shared bug fix\n")
     self.assertEqual(git(self.destination, "rev-list", "--count", "HEAD").strip(), "2")
 
+  def commit_file(self, name, text, message):
+    path = self.root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    git(self.root, "add", name)
+    git(self.root, "commit", "-m", message)
+    return git(self.root, "rev-parse", "HEAD").strip()
+
+  def test_automatic_changes_exclude_personal_and_build_only_commits(self):
+    EXPORT.snapshot(self.root, self.destination, "HEAD")
+    shared = self.commit_file("app/src/main/java/widget/RootFrameLayout.java", "keyboard fix",
+                              "Recover missing keyboard animation frames")
+    self.commit_file(".personal/private.txt", "personal feature", "Personal-only customization")
+    self.commit_file("scripts/build.py", "build fix", "Fix build configuration")
+    self.commit_file("app/src/main/java/ui/ForumTopicView.java", "topic previews",
+                     "Improve forum topic previews")
+    EXPORT.snapshot(self.root, self.destination, "HEAD")
+    message = git(self.destination, "log", "-1", "--format=%B")
+    self.assertEqual(EXPORT.CHANGES.message_changes(message),
+                     ["Recover missing keyboard animation frames", "Improve forum topic previews"])
+    self.assertNotIn("Personal-only", message)
+    self.assertNotIn("build configuration", message)
+    self.assertNotIn(shared, message)
+    self.assertNotIn("Private author", message)
+    with self.assertRaises(subprocess.CalledProcessError):
+      git(self.destination, "cat-file", "-e", shared + "^{commit}")
+
+  def test_mixed_and_sensitive_subjects_use_safe_public_feature_summaries(self):
+    EXPORT.snapshot(self.root, self.destination, "HEAD")
+    self.commit_file("app/src/main/java/widget/RootFrameLayout.java", "fix",
+                     "Fix private identity keyboard behavior")
+    self.commit_file("app/src/main/java/ui/ForumTopicView.java", "topic previews",
+                     "Prepare shared feature")
+    (self.root / ".personal/private.txt").write_text("personal feature")
+    (self.root / "app/src/main/java/ui/ForumTopicView.java").write_text("better previews")
+    git(self.root, "commit", "-am", "Add private feature alongside topic fix")
+    EXPORT.snapshot(self.root, self.destination, "HEAD", ("private identity",))
+    message = git(self.destination, "log", "-1", "--format=%B")
+    self.assertNotIn("private", message.lower())
+    self.assertIn("Improve keyboard and input panel behavior", message)
+    self.assertIn("Improve forum topics and message previews", message)
+
+  def test_old_export_migrates_automatically_without_a_source_mapping(self):
+    EXPORT.snapshot(self.root, self.destination, "HEAD")
+    (self.destination / ".git/public-export-state.json").unlink()
+    self.commit_file("app/src/main/java/ui/ForumTopicView.java", "topic previews",
+                     "Improve forum topic previews")
+    EXPORT.snapshot(self.root, self.destination, "HEAD")
+    self.assertEqual(EXPORT.CHANGES.message_changes(git(self.destination, "log", "-1", "--format=%B")),
+                     ["Improve forum topic previews"])
+    self.assertTrue((self.destination / ".git/public-export-state.json").is_file())
+
+  def test_personal_only_export_does_not_create_a_public_commit(self):
+    EXPORT.snapshot(self.root, self.destination, "HEAD")
+    before = git(self.destination, "rev-parse", "HEAD")
+    self.commit_file(".personal/private.txt", "personal feature", "Personal-only customization")
+    EXPORT.snapshot(self.root, self.destination, "HEAD")
+    self.assertEqual(git(self.destination, "rev-parse", "HEAD"), before)
+    self.commit_file("app/src/main/java/ui/ForumTopicView.java", "topic previews",
+                     "Improve forum topic previews")
+    EXPORT.snapshot(self.root, self.destination, "HEAD")
+    self.assertEqual(EXPORT.CHANGES.message_changes(git(self.destination, "log", "-1", "--format=%B")),
+                     ["Improve forum topic previews"])
+
+  def test_build_only_export_has_an_explicit_empty_changelog(self):
+    EXPORT.snapshot(self.root, self.destination, "HEAD")
+    self.commit_file("scripts/build.py", "build fix", "Fix build configuration")
+    EXPORT.snapshot(self.root, self.destination, "HEAD")
+    self.assertEqual(EXPORT.CHANGES.message_changes(git(self.destination, "log", "-1", "--format=%B")), [])
+
+  def test_client_build_and_test_files_do_not_count_as_runtime_changes(self):
+    EXPORT.snapshot(self.root, self.destination, "HEAD")
+    self.commit_file("tdlib/build.gradle.kts", "build fix", "Fix dependency build")
+    self.commit_file("app/src/main/java/tests/Fixture.java", "test fix", "Fix test fixture")
+    EXPORT.snapshot(self.root, self.destination, "HEAD")
+    self.assertEqual(EXPORT.CHANGES.message_changes(git(self.destination, "log", "-1", "--format=%B")), [])
+
+  def test_reverted_client_files_do_not_create_changelog_entries(self):
+    self.commit_file("app/src/main/java/ui/ForumTopicView.java", "original", "Initial topic view")
+    EXPORT.snapshot(self.root, self.destination, "HEAD")
+    self.commit_file("app/src/main/java/ui/ForumTopicView.java", "temporary", "Temporary topic fix")
+    self.commit_file("app/src/main/java/ui/ForumTopicView.java", "original", "Revert topic fix")
+    self.commit_file("scripts/build.py", "build fix", "Fix build configuration")
+    EXPORT.snapshot(self.root, self.destination, "HEAD")
+    self.assertEqual(EXPORT.CHANGES.message_changes(git(self.destination, "log", "-1", "--format=%B")), [])
+
+  def test_upstream_merge_is_one_public_change_without_upstream_commit_messages(self):
+    EXPORT.snapshot(self.root, self.destination, "HEAD")
+    git(self.root, "checkout", "-b", "upstream")
+    self.commit_file("app/src/main/java/ui/ForumTopicView.java", "upstream changes",
+                     "Upstream implementation details")
+    git(self.root, "checkout", "main")
+    git(self.root, "merge", "--no-ff", "upstream", "-m", "Merge upstream Telegram X version 1818")
+    EXPORT.snapshot(self.root, self.destination, "HEAD")
+    self.assertEqual(EXPORT.CHANGES.message_changes(git(self.destination, "log", "-1", "--format=%B")),
+                     ["Merge upstream Telegram X version 1818"])
+
   def test_identity_in_source_is_rejected_before_destination_creation(self):
     (self.root / "README.md").write_text("private identity\n")
     git(self.root, "commit", "-am", "Private name")

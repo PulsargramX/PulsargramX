@@ -902,7 +902,22 @@ public class ContentPreview {
           ContentPreview newPreview = getAlbumPreview(tdlib, message, localAlbum, allowContent);
           if (localAlbum.messages.size() == 1) {
             if (newPreview.hasRefresher()) {
-              newPreview.refreshContent(callback);
+              // Keep the callback tied to the preview displayed by the caller while
+              // the remaining album items (and their caption) load from the server.
+              newPreview.refreshContent(new RefreshCallback() {
+                @Override
+                public void onContentPreviewChanged (long chatId, long messageId,
+                                                     ContentPreview refreshedPreview,
+                                                     ContentPreview ignoredPreview) {
+                  callback.onContentPreviewChanged(chatId, messageId, refreshedPreview, oldContent);
+                }
+
+                @Override
+                public void onContentPreviewNotChanged (long chatId, long messageId,
+                                                        ContentPreview ignoredPreview) {
+                  callback.onContentPreviewNotChanged(chatId, messageId, oldContent);
+                }
+              });
             } else {
               callback.onContentPreviewNotChanged(message.chatId, message.id, oldContent);
             }
