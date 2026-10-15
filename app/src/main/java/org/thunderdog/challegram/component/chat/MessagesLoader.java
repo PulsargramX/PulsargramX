@@ -1917,7 +1917,8 @@ public class MessagesLoader implements Client.ResultHandler {
 
   public boolean canLoadBottom () {
     if (canLoadBottom) {
-      if (isEndReached()) {
+      // While loading, the adapter may still contain the previous history slice.
+      if (!isLoading && isEndReached()) {
         canLoadBottom = false;
         manager.onBottomEndLoaded();
         return false;

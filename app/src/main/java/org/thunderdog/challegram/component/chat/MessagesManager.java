@@ -519,7 +519,11 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   }
 
   public void checkScrollToBottomButton () {
-    controller.setScrollToBottomVisible(getActiveMessageCount() > 0 && (lastScrollToBottomVisible || loader.canLoadBottom() || hasReturnMessage()), isReturnAbove());
+    boolean isReverse = isReturnAbove();
+    // A reply return can outlive the scroll that already reached the newest message.
+    boolean isVisible = getActiveMessageCount() > 0 && (loader.canLoadBottom() ||
+      ((lastScrollToBottomVisible || hasReturnMessage()) && (isReverse || !isAtVeryBottom())));
+    controller.setScrollToBottomVisible(isVisible, isReverse);
   }
 
   public void checkMessageThreadHeaderPreview (int last) {
@@ -1840,10 +1844,6 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   private View findTopView () {
     int count = adapter.getMessageCount();
     return count == 0 ? manager.findViewByPosition(0) : manager.findViewByPosition(count - 1);
-  }
-
-  private View findBottomView () {
-    return manager.findViewByPosition(0);
   }
 
   public void rebuildFirstItem (boolean byLayout, boolean changed) {
@@ -3310,8 +3310,19 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   }
 
   public boolean isAtVeryBottom () {
-    View view = findBottomView();
-    return view != null && view.getBottom() == ((View) view.getParent()).getMeasuredHeight() - ((View) view.getParent()).getPaddingBottom();
+    for (int i = 0; i < adapter.getMessageCount(); i++) {
+      TGMessage message = adapter.getMessage(i);
+      if (message == null || message.isSponsoredMessage() || message.isHiddenByMessagesFilter()) {
+        continue;
+      }
+      View view = manager.findViewByPosition(i);
+      if (view == null || !(view.getParent() instanceof View)) {
+        return false;
+      }
+      View parent = (View) view.getParent();
+      return view.getBottom() <= parent.getMeasuredHeight() - parent.getPaddingBottom();
+    }
+    return false;
   }
 
   /*public boolean canApplyRecyclerOffsets () {

@@ -32,6 +32,14 @@ class MessageHistoryPaginationTest(unittest.TestCase):
         begin = source.index("case TdApi.Error.CONSTRUCTOR: {")
         error = source[source.index("{", begin) + 1:
                        source.index("messages = new TdApi.Message[0];", begin)]
+        manager_source = read(
+            "app/src/main/java/org/thunderdog/challegram/component/chat/MessagesManager.java"
+        )
+        manager_methods = "\n".join(java_method(manager_source, signature) for signature in (
+            "public void checkScrollToBottomButton ()",
+            "private void updateNewMessage (TGMessage message)",
+            "public void onDestroySearch ()",
+        ))
         harness = r'''
 import java.util.*;
 import org.drinkless.tdlib.TdApi;
@@ -46,7 +54,7 @@ public class HistoryPaginationTest {
   static final int CHUNK_SIZE_SMALL = 19, CHUNK_SIZE_SEARCH = 33;
   static final int CHUNK_SIZE_BIG = 50, CHUNK_SIZE_BOTTOM = 31, CHUNK_BOTTOM_OFFSET = -30;
   final Object lock = new Object();
-  final MessagesManager manager = new MessagesManager();
+  final MessagesManager manager = new MessagesManager(this);
   final TdApi.Chat chat = new TdApi.Chat();
   final List<MessageId> requests = new ArrayList<>();
   ThreadInfo messageThread;
@@ -76,6 +84,9 @@ public class HistoryPaginationTest {
   }
   long getChatId() {return chat.id;}
   long getLastMessageId() {return lastMessageId;}
+  int getSpecialMode() {return specialMode;}
+  ThreadInfo getMessageThread() {return messageThread;}
+  TdApi.MessageTopic getMessageTopicId() {return null;}
   boolean isForumTopic() {return false;}
   TdApi.ForumTopic getForumTopic() {return null;}
   boolean hasSearchFilter() {return searchFilter != null;}
@@ -124,8 +135,16 @@ public class HistoryPaginationTest {
     long getId() {return getBiggestId();}
     int getMessageCount() {return messages.size();}
     MessageId toMessageId() {return new MessageId(getChatId(), getId());}
+    TdApi.Message getMessage() {return messages.get(0);}
+    TdApi.MessageTopic getMessageTopicId() {return null;}
     boolean isOutgoing() {return false;}
+    boolean isSending() {return false;}
+    boolean isOld() {return false;}
+    boolean isChatMember() {return false;}
     boolean isSponsoredMessage() {return false;}
+    void markAsUnread() {}
+    void invalidateContentReceiver(long id, int type) {}
+    void onDestroy() {}
     void setUnread(long id) {}
     void setShowUnreadBadge(boolean show) {}
     void mergeWith(TGMessage other, boolean end) {}
@@ -136,13 +155,45 @@ public class HistoryPaginationTest {
     final List<TGMessage> rows = new ArrayList<>();
     TGMessage getBottomActiveMessage() {return rows.isEmpty() ? null : rows.get(0);}
     TGMessage getTopActiveMessage() {return rows.isEmpty() ? null : rows.get(rows.size() - 1);}
+    TGMessage getBottomMessage() {return getBottomActiveMessage();}
+    boolean addMessage(TGMessage message, boolean top, boolean scroll) {
+      rows.add(top ? rows.size() : 0, message);
+      return false;
+    }
+  }
+  static class MessagesLoader {
+    static final int SPECIAL_MODE_RESTRICTED = HistoryPaginationTest.SPECIAL_MODE_RESTRICTED;
+    static final int SPECIAL_MODE_SEARCH = HistoryPaginationTest.SPECIAL_MODE_SEARCH;
   }
   static class MessagesManager {
     static final int HIGHLIGHT_MODE_NONE = 0, HIGHLIGHT_MODE_NORMAL = 1, HIGHLIGHT_MODE_UNREAD = 2;
     static final int HIGHLIGHT_MODE_POSITION_RESTORE = 3;
     static final int HIGHLIGHT_MODE_UNREAD_NEXT = 4, HIGHLIGHT_MODE_NORMAL_NEXT = 5;
     final Adapter adapter = new Adapter();
+    final LayoutManager manager = new LayoutManager();
+    final Controller controller = new Controller();
+    final SearchManager searchManager = new SearchManager();
+    final HistoryPaginationTest loader;
+    TdApi.ChatEventLogFilters eventLogFilters;
+    long[] eventLogUserIds;
+    boolean lastScrollToBottomVisible;
     int topEnds, bottomEnds, checkedEnds, networkRequests;
+    MessagesManager(HistoryPaginationTest loader) {this.loader = loader;}
+    MANAGER_METHODS
+    int getActiveMessageCount() {return adapter.rows.size();}
+    boolean isReturnAbove() {return false;}
+    boolean hasReturnMessage() {return false;}
+    boolean isAtVeryBottom() {return false;}
+    boolean isEventLog() {return false;}
+    void applyEventLogFilters(TdApi.ChatEventLogFilters filters, String query, long[] ids) {
+      throw new AssertionError("Ordinary search must not change event log filters");
+    }
+    void revokeReturnMessages() {}
+    void scrollToBottom(boolean animated) {}
+    void scrollToPositionWithOffsetImpl(int position, int offset) {}
+    void loadFromStart() {throw new AssertionError("Unexpected jump to latest history");}
+    int calculateOffsetInPixels(View view, int padding) {return 0;}
+    int getExtraScrollSpacing() {return 0;}
     Adapter getAdapter() {return adapter;}
     LongSparseArray<TdApi.ChatAdministrator> getChatAdmins() {return null;}
     long maxPinnedMessageId() {return 0;}
@@ -158,6 +209,25 @@ public class HistoryPaginationTest {
       else adapter.rows.addAll(items);
     }
   }
+  static class View {Object getParent() {return null;}}
+  static class SearchManager {
+    boolean dismissed;
+    void onDismiss() {dismissed = true;}
+  }
+  static class LayoutManager {
+    int findFirstVisibleItemPosition() {return 5;}
+    int findFirstCompletelyVisibleItemPosition() {return 5;}
+    View findViewByPosition(int position) {return null;}
+    void scrollToPosition(int position) {}
+  }
+  static class Controller {
+    boolean scrollToBottomVisible;
+    void checkSwitchPm(TdApi.Message message) {}
+    boolean canWriteMessages() {return true;}
+    void setScrollToBottomVisible(boolean visible, boolean reverse) {
+      scrollToBottomVisible = visible;
+    }
+  }
   static class ThreadInfo {
     long getChatId() {return 10;}
     long getLastReadOutboxMessageId() {return 0;}
@@ -165,10 +235,14 @@ public class HistoryPaginationTest {
     long getOldestMessageId() {return 1;}
     long getNewestMessageId() {return 2;}
     boolean hasUnreadMessages(TdApi.Chat chat) {return false;}
+    void updateNewMessage(TGMessage message) {}
   }
   static class LongSparseArray<T> {T get(long id) {return null;}}
   static class Td {
     static long getSenderUserId(TdApi.Message message) {return 0;}
+    static boolean matchesTopic(TdApi.MessageTopic first, TdApi.MessageTopic second) {
+      return first == second;
+    }
     static boolean isPinnedFilter(TdApi.SearchMessagesFilter filter) {
       return filter instanceof TdApi.SearchMessagesFilterPinned;
     }
@@ -206,6 +280,54 @@ public class HistoryPaginationTest {
     HistoryPaginationTest loader = new HistoryPaginationTest(older ? MODE_MORE_TOP : MODE_MORE_BOTTOM);
     TGMessage album = loader.manager.adapter.rows.get(0);
     switch (scenario) {
+      case "search-history-race":
+      case "search-live-message-race":
+      case "dismissed-search-history-race": {
+        loader.manager.adapter.rows.clear();
+        loader.manager.adapter.rows.add(new TGMessage(message(100, 0)));
+        loader.loadingMode = MODE_REPEAT_INITIAL;
+        loader.scrollMessageId = new MessageId(10, 50);
+        loader.scrollHighlightMode = MessagesManager.HIGHLIGHT_MODE_NORMAL;
+        TdApi.Message[] slice = new TdApi.Message[33];
+        for (int i = 0; i < slice.length; i++) slice[i] = message(65 - i, 0);
+        // The TDLib callback finishes while RecyclerView still displays the latest history.
+        loader.respond(slice);
+        check(loader.manager.adapter.getBottomActiveMessage().getId() == 100,
+          "The old list stays visible until the queued history replacement runs");
+        loader.manager.checkScrollToBottomButton();
+        UI.flush();
+        if (scenario.equals("dismissed-search-history-race")) {
+          loader.manager.onDestroySearch();
+          check(loader.manager.searchManager.dismissed, "Close the search UI");
+        }
+        if (!scenario.equals("search-history-race")) {
+          loader.lastMessageId = 101;
+          loader.manager.updateNewMessage(new TGMessage(message(101, 0)));
+          check(loader.manager.adapter.getBottomActiveMessage().getId() == 65,
+            "Live messages must not be spliced across the gap after a search jump");
+        }
+        check(loader.canLoadBottom() && loader.manager.bottomEnds == 0,
+          "Checking the old list during replacement must not close the new history slice");
+        check(loader.loadMore(false) && loader.requests.get(0).id == 65,
+          "Forward pagination must continue from the search history boundary");
+        loader.respond(message(67, 0), message(66, 0), message(65, 0));
+        UI.flush();
+        check(loader.manager.adapter.getBottomActiveMessage().getId() == 67,
+          "The messages immediately following the search slice remain reachable");
+        break;
+      }
+      case "current-history-live-message": {
+        loader.manager.adapter.rows.clear();
+        loader.manager.adapter.rows.add(new TGMessage(message(100, 0)));
+        loader.isLoading = false;
+        check(!loader.canLoadBottom(), "An installed history slice may confirm the real end");
+        loader.lastMessageId = 101;
+        loader.manager.updateNewMessage(new TGMessage(message(101, 0)));
+        check(loader.manager.adapter.rows.size() == 2 &&
+          loader.manager.adapter.getBottomActiveMessage().getId() == 101,
+          "Live messages still append normally when the history is current");
+        break;
+      }
       case "album-newer":
       case "album-older": {
         loader.respond(older ? message(50, 7) : message(52, 7),
@@ -298,7 +420,7 @@ public class HistoryPaginationTest {
     }
   }
 }
-'''.replace("METHODS", methods).replace("ERROR", error)
+'''.replace("MANAGER_METHODS", manager_methods).replace("METHODS", methods).replace("ERROR", error)
         with tempfile.TemporaryDirectory(prefix="message-history-") as temp:
             work = Path(temp)
             annotations = []
@@ -318,6 +440,8 @@ public class HistoryPaginationTest {
                 str(ROOT / "tdlib/src/main/java/org/drinkless/tdlib/TdApi.java"), str(test),
             ], check=True)
             for scenario in (
+                "search-history-race", "search-live-message-race", "dismissed-search-history-race",
+                "current-history-live-message",
                 "album-newer", "album-older", "mixed-newer", "overlap-newer", "empty-older",
                 "last-album", "stale-album", "history-error", "search-error", "thread-error",
                 "album-error", "stale-error",
