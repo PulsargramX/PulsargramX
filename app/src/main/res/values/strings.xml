@@ -310,6 +310,7 @@
   <string name="xCalls_other">%1$s calls</string>
   <string name="general_Messages">Messages</string>
   <string name="SelectChat">Select Chat</string>
+  <string name="QuoteTo">Quote to…</string>
   <string name="Message">Message</string>
   <string name="MessageInputTextDisabled">Text is disabled</string>
   <string name="MessageInputTextDisabledHint">Admins of this group disabled ability to send text messages.</string>

@@ -624,14 +624,7 @@ public final class MessageTextSelectionManager {
     quoteText.entities = filterQuoteEntities(quoteText.entities);
     TdApi.InputTextQuote quote = new TdApi.InputTextQuote(quoteText, start);
     cancel();
-    controller.showReply(
-      new MessageWithProperties(message, properties),
-      quote,
-      0,
-      "",
-      true,
-      true
-    );
+    controller.quoteMessage(new MessageWithProperties(message, properties), quote);
   }
 
   private static TdApi.TextEntity[] filterQuoteEntities (
@@ -659,12 +652,13 @@ public final class MessageTextSelectionManager {
 
   private boolean canQuote () {
     MessageTextSelectionTarget target = this.target;
-    if (target == null || !target.canQuote || !target.hasIdentitySourceMapping() ||
-        !controller.canWriteMessages()) {
+    if (target == null || !target.canQuote || !target.hasIdentitySourceMapping()) {
       return false;
     }
     TdApi.Message message = target.container.getMessage(target.replyMessageId);
-    return message != null && TD.canReplyTo(message);
+    return message != null && controller.canQuoteMessage(new MessageWithProperties(
+      message, target.container.lastMessageProperties(target.replyMessageId)
+    ));
   }
 
   private boolean canSelectAll () {

@@ -632,8 +632,12 @@ public abstract class ViewController<T> implements Future<View>, ThemeChangeList
   }
 
   public final void closeSelectMode () {
+    closeSelectMode(true);
+  }
+
+  public final void closeSelectMode (boolean animated) {
     if (headerView != null) {
-      headerView.closeSelectMode();
+      headerView.closeSelectMode(animated);
     }
   }
 

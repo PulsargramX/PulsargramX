@@ -304,6 +304,19 @@ public class ChatListPreviewTest {
     tdlib.flush();
     check(row.previewFormattedText == caption && row.previewIconIds.get(0) == 70, "Remote album caption replaces last item placeholder");
     check(row.layouts == 1 && row.invalidations == 1, "Accepted caption refresh rebuilds and redraws");
+    TdApi.Message[] eightPhotos = new TdApi.Message[8];
+    for (int i = 0; i < eightPhotos.length; i++) {
+      eightPhotos[i] = photo(107 - i, i == 7 ? caption : null);
+    }
+    tdlib.local = new Tdlib.Album(true, eightPhotos[0]);
+    tdlib.remote = new Tdlib.Album(false, eightPhotos);
+    TopicRow eightPhotoRow = new TopicRow(tdlib, eightPhotos[0]);
+    eightPhotoRow.setContentPreview(ContentPreview.forMessage(tdlib, eightPhotos[0]));
+    tdlib.flush();
+    check(eightPhotoRow.previewFormattedText == caption && eightPhotoRow.previewIconIds.get(0) == 70,
+      "Eight-photo preview must show the oldest photo's caption and album icon");
+    tdlib.local = new Tdlib.Album(true, last);
+    tdlib.remote = new Tdlib.Album(false, last, first);
     row.setContentPreview(ContentPreview.forMessage(tdlib, last));
     ContentPreview replacement = new ContentPreview(ContentPreview.EMOJI_PHOTO, 0, new TdApi.FormattedText("Another topic", null), false);
     row.setContentPreview(replacement); tdlib.flush();

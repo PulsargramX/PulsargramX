@@ -2824,7 +2824,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
   }
 
   private static boolean shouldIgnoreDraftLoad (Object object) {
-    return object instanceof TGSwitchInline;
+    return object instanceof TGSwitchInline || object instanceof ReplyInfo;
   }
 
   private void shareItem () {
@@ -2835,6 +2835,16 @@ public class MessagesController extends ViewController<MessagesController.Argume
   }
 
   public void shareItem (Object item) {
+    if (item instanceof ReplyInfo) {
+      ReplyInfo sharedReply = (ReplyInfo) item;
+      if (sharedReply.tdlib == tdlib && !isSecretChat() && hasSendBasicMessagePermission() &&
+          sharedReply.message.properties.canBeRepliedInAnotherChat) {
+        showReply(sharedReply.message, sharedReply.quote, sharedReply.checklistTaskId,
+          sharedReply.pollOptionId, true, true);
+      }
+      return;
+    }
+
     if (item instanceof InlineResultButton) {
       if (!hasSendBasicMessagePermission()) {
         return;
@@ -5745,6 +5755,10 @@ public class MessagesController extends ViewController<MessagesController.Argume
 
   @Override
   public void finishSelectMode (int position) {
+    finishSelectMode(position, true);
+  }
+
+  private void finishSelectMode (int position, boolean animatedHeader) {
     if (messageTextSelectionManager != null) {
       messageTextSelectionManager.cancel();
     }
@@ -5763,7 +5777,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
         );
       }
       if (position == -1) {
-        closeSelectMode();
+        closeSelectMode(animatedHeader);
       }
     }
     if (position == -2) {
@@ -7005,6 +7019,58 @@ public class MessagesController extends ViewController<MessagesController.Argume
         }
       }
     }
+  }
+
+  public boolean canQuoteMessage (MessageWithProperties message) {
+    return !inPreviewMode() && !isInForceTouchMode() && !isSecretChat() &&
+      TD.canReplyTo(message.message) &&
+      (canWriteMessages() && message.properties.canBeReplied ||
+       message.properties.canBeRepliedInAnotherChat);
+  }
+
+  public void quoteMessage (MessageWithProperties message, TdApi.InputTextQuote quote) {
+    if (Td.isEmpty(quote) || !canQuoteMessage(message)) {
+      return;
+    }
+    if (canWriteMessages() && message.properties.canBeReplied) {
+      showReply(message, quote, 0, "", true, true);
+      return;
+    }
+
+    ReplyInfo quotedReply = new ReplyInfo(tdlib, message, quote, 0, "");
+    ChatPickerController picker = new ChatPickerController(context, tdlib);
+    picker.setArguments(new ChatsController.Arguments(
+      destination -> destination.type.getConstructor() != TdApi.ChatTypeSecret.CONSTRUCTOR &&
+        tdlib.canSendBasicMessage(destination),
+      new ChatsController.PickerDelegate() {
+        @Override
+        public boolean onChatPicked (TdApi.Chat destination, Runnable onDone) {
+          if (destination.type.getConstructor() == TdApi.ChatTypeSecret.CONSTRUCTOR ||
+              !tdlib.canSendBasicMessage(destination)) {
+            UI.showToast(R.string.YouCantSendMessages, Toast.LENGTH_SHORT);
+            return false;
+          }
+          return true;
+        }
+
+        @Override
+        public Object getShareItem () {
+          return quotedReply;
+        }
+
+        @Override
+        public int getTitleStringRes () {
+          return R.string.QuoteTo;
+        }
+
+        @Override
+        public void modifyChatOpenParams (TdlibUi.ChatOpenParameters params) {
+          params.keepStack();
+        }
+      }
+    ));
+    finishSelectMode(-1, false);
+    navigateTo(picker);
   }
 
   public void showReply (MessageWithProperties msg, @Nullable TdApi.InputTextQuote quote, int checklistTaskId, String pollOptionId, boolean byUser, boolean showKeyboard) {

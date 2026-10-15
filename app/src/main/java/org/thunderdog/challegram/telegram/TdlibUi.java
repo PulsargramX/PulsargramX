@@ -96,6 +96,7 @@ import org.thunderdog.challegram.ui.ChatFolderInviteLinkController;
 import org.thunderdog.challegram.ui.ChatJoinRequestsController;
 import org.thunderdog.challegram.ui.ChatLinkMembersController;
 import org.thunderdog.challegram.ui.ChatLinksController;
+import org.thunderdog.challegram.ui.ChatPickerController;
 import org.thunderdog.challegram.ui.ChatsController;
 import org.thunderdog.challegram.ui.EditChatFolderController;
 import org.thunderdog.challegram.ui.EditChatLinkController;
@@ -1606,7 +1607,7 @@ public class TdlibUi extends Handler {
       tdlib.runOnUiThread(() -> addToGroup(context, userId));
       return;
     }
-    ChatsController c = new ChatsController(context.context(), context.tdlib());
+    ChatPickerController c = new ChatPickerController(context.context(), context.tdlib());
     c.setArguments(new ChatsController.Arguments(ChatFilter.groupsInviteFilter(tdlib), new ChatsController.PickerDelegate() {
       @Override
       public boolean onChatPicked (TdApi.Chat chat, Runnable onDone) {
@@ -1637,7 +1638,7 @@ public class TdlibUi extends Handler {
       post(() -> addToGroup(context, start, isGame));
       return;
     }
-    ChatsController c = new ChatsController(context.context(), context.tdlib());
+    ChatPickerController c = new ChatPickerController(context.context(), context.tdlib());
     c.setArguments(new ChatsController.Arguments(isGame ? ChatFilter.gamesFilter(tdlib) : ChatFilter.groupsInviteFilter(tdlib), new ChatsController.PickerDelegate() {
       @Override
       public boolean onChatPicked (final TdApi.Chat chat, final Runnable onDone) {
@@ -2245,12 +2246,12 @@ public class TdlibUi extends Handler {
       return;
     }
 
-    // Open the topic list for supergroup forums in topics mode and always for private topic-enabled bots.
+    // Quoted replies need a destination topic even when the forum is viewed as a chat.
     boolean privateChatWithTopics = tdlib.isPrivateChatWithTopics(chat);
     if (tdlib.hasTopics(chat) && messageThread == null && messageTopicId == null &&
-        (privateChatWithTopics || chat.viewAsTopics)) {
+        (privateChatWithTopics || chat.viewAsTopics || shareItem instanceof MessagesController.ReplyInfo)) {
       ForumTopicsController listController = new ForumTopicsController(context.context(), context.tdlib());
-      listController.setArguments(new ForumTopicsController.Arguments(chat));
+      listController.setArguments(new ForumTopicsController.Arguments(chat).setShareItem(shareItem));
 
       NavigationController nav = context.context().navigation();
       if (nav.isEmpty()) {

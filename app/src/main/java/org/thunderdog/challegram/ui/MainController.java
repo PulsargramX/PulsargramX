@@ -34,7 +34,6 @@ import android.os.SystemClock;
 import android.provider.ContactsContract;
 import android.text.Spannable;
 import android.text.SpannableString;
-import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -1596,7 +1595,7 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
     boolean showAsArchive = (isMain && menuNeedArchive) || isArchive;
     if (hasFolders) {
       String source;
-      boolean iconOnly = chatFolderStyle == ChatFolderStyle.ICON_ONLY || (isMain && pagerItemPosition == 0);
+      boolean iconOnly = !ChatFolderTab.hasLabel(chatFolderStyle, isMain && pagerItemPosition == 0);
       if (iconOnly) {
         source = "";
       } else if (showAsArchive) {
@@ -1657,14 +1656,14 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
     int selectedFilter = getSelectedFilter(pagerItemId);
     CharSequence sectionName;
     if (selectedFilter != FILTER_NONE) {
-      CharSequence source = chatFolderStyle == ChatFolderStyle.ICON_ONLY ? "" : folderName;
+      CharSequence source = ChatFolderTab.hasLabel(chatFolderStyle, false) ? folderName : "";
       if (useGlobalFilter() && selectedFilter == globalFilter) {
         sectionName = source;
       } else {
         sectionName = appendFilterIcon(source, selectedFilter);
       }
     } else {
-      sectionName = chatFolderStyle == ChatFolderStyle.ICON_ONLY ? "" : folderName;
+      sectionName = ChatFolderTab.hasLabel(chatFolderStyle, false) ? folderName : "";
     }
     return Emoji.instance().replaceEmoji(sectionName);
   }
@@ -1825,15 +1824,9 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
   private ViewPagerTopView.Item getDefaultMainItem () {
     if (defaultMainItem == null) {
       CharSequence mainItem = getMenuSectionName(MAIN_PAGER_ITEM_ID, 0, false, ChatFolderStyle.LABEL_ONLY,  /* upperCase */ true);
-      UnreadCounterColorSet unreadCounterColorSet = UnreadCounterColorSet.create(this);
-      Counter unreadCounter = new Counter.Builder()
-        .textSize(12f)
-        .backgroundPadding(4f)
-        .outlineAffectsBackgroundSize(false)
-        .colorSet(unreadCounterColorSet)
-        .callback(unreadCounterCallback(MAIN_PAGER_ITEM_ID))
-        .build();
-      unreadCounterColorSet.setCounter(unreadCounter);
+      Counter unreadCounter = ChatFolderTab.buildCounter(
+        this::displayTabsAtBottom, unreadCounterCallback(MAIN_PAGER_ITEM_ID)
+      );
       updateCounter(ChatPosition.CHAT_LIST_MAIN, unreadCounter, tdlib.getCounter(ChatPosition.CHAT_LIST_MAIN), false);
       defaultCounterListener = new CounterChangeListener() {
         @Override
@@ -2784,14 +2777,8 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
     ViewPagerHeaderViewCompact headerCellView = (ViewPagerHeaderViewCompact) headerCell.getView();
     boolean hasFolders = hasFolders();
     boolean displayTabsAtBottom = displayTabsAtBottom();
-    headerCell.getTopView().setAnimateItemChanges(!Settings.instance().needReduceMotion());
-    headerCell.getTopView().setShowLabelOnActiveOnly(hasFolders && tdlib.settings().chatFolderStyle() == ChatFolderStyle.ICON_WITH_LABEL_ON_ACTIVE_FOLDER);
-    headerCell.getTopView().setUseDarkBackground(displayTabsAtBottom);
-    headerCell.getTopView().setDrawSelectionAtTop(displayTabsAtBottom);
-    headerCell.getTopView().setSlideOffDirection(displayTabsAtBottom ? ViewPagerTopView.SLIDE_OFF_DIRECTION_TOP : ViewPagerTopView.SLIDE_OFF_DIRECTION_BOTTOM);
-    headerCell.getTopView().setItemPadding(Screen.dp(hasFolders ? ViewPagerTopView.COMPACT_ITEM_PADDING : ViewPagerTopView.DEFAULT_ITEM_PADDING));
-    headerCell.getTopView().setItemSpacing(Screen.dp(hasFolders ? ViewPagerTopView.COMPACT_ITEM_SPACING : ViewPagerTopView.DEFAULT_ITEM_SPACING));
-    headerCellView.setFadingEdgeLength(displayTabsAtBottom ? 0f : 16f);
+    ChatFolderTab.configure(headerCellView, tdlib.settings().chatFolderStyle(), hasFolders,
+      displayTabsAtBottom);
 
     if (displayTabsAtBottom) {
       if (bottomBar == null) {
@@ -3004,32 +2991,15 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
       TdlibCounter counter = tdlib.getCounter(chatList);
       updateCounter(chatList, unreadCounter, counter, /* animated */ false);
     }
-    boolean showIcon = hasIcon(chatFolderStyle) || (pagerItemId == MAIN_PAGER_ITEM_ID && pagerItemPosition == 0);
-    if (!showIcon) {
-      iconResource = ResourcesCompat.ID_NULL;
-    }
-    if (TextUtils.isEmpty(sectionName)) {
-      sectionName = null;
-    }
-    ViewPagerTopView.Item item = new ViewPagerTopView.Item(sectionName, iconResource, unreadCounter);
-    item.setMinWidth(Screen.dp(56f - ViewPagerTopView.COMPACT_ITEM_PADDING * 2));
-    return item;
+    return ChatFolderTab.build(sectionName, iconResource, chatFolderStyle,
+      pagerItemId == MAIN_PAGER_ITEM_ID && pagerItemPosition == 0, unreadCounter);
   }
 
   private @Nullable Counter buildUnreadCounter (long pagerItemId, int selectedFilter) {
     if (selectedFilter != FILTER_NONE || (pagerItemId == MAIN_PAGER_ITEM_ID && menuNeedArchive)) {
       return null;
     }
-    UnreadCounterColorSet unreadCounterColorSet = UnreadCounterColorSet.create(this);
-    Counter unreadCounter = new Counter.Builder()
-      .textSize(12f)
-      .backgroundPadding(4f)
-      .outlineAffectsBackgroundSize(false)
-      .colorSet(unreadCounterColorSet)
-      .callback(unreadCounterCallback(pagerItemId))
-      .build();
-    unreadCounterColorSet.setCounter(unreadCounter);
-    return unreadCounter;
+    return ChatFolderTab.buildCounter(this::displayTabsAtBottom, unreadCounterCallback(pagerItemId));
   }
 
   private Counter.Callback unreadCounterCallback (long pagerItemId) {
@@ -3093,10 +3063,6 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
 
     public UnreadCounterColorSet (FutureBool displayTabsAtBottom) {
       this.displayTabsAtBottom = displayTabsAtBottom;
-    }
-
-    private static UnreadCounterColorSet create(MainController parent) {
-      return new UnreadCounterColorSet(parent::displayTabsAtBottom);
     }
 
     public void setCounter (@Nullable Counter counter) {
@@ -3368,16 +3334,7 @@ public class MainController extends ViewPagerController<Void> implements Menu, M
   }
 
   private boolean hasIcon (@ChatFolderStyle int chatFolderStyle) {
-    switch (chatFolderStyle) {
-      case ChatFolderStyle.ICON_ONLY:
-      case ChatFolderStyle.LABEL_AND_ICON:
-      case ChatFolderStyle.ICON_WITH_LABEL_ON_ACTIVE_FOLDER:
-        return true;
-      case ChatFolderStyle.LABEL_ONLY:
-        return false;
-      default:
-        throw new IllegalArgumentException("chatFolderStyle = " + chatFolderStyle);
-    }
+    return ChatFolderTab.hasIcon(chatFolderStyle);
   }
 
   private boolean sameChatsController (@Nullable ViewController<?> controller, TdApi.ChatList chatList, @Filter int filter) {

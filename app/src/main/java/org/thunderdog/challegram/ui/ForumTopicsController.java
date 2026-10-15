@@ -76,6 +76,7 @@ public class ForumTopicsController extends TelegramViewController<ForumTopicsCon
   public static class Arguments {
     public final long chatId;
     public final TdApi.Chat chat;
+    public @Nullable Object shareItem;
 
     public Arguments (long chatId, @Nullable TdApi.Chat chat) {
       this.chatId = chatId;
@@ -85,6 +86,11 @@ public class ForumTopicsController extends TelegramViewController<ForumTopicsCon
     public Arguments (TdApi.Chat chat) {
       this.chatId = chat.id;
       this.chat = chat;
+    }
+
+    public Arguments setShareItem (@Nullable Object shareItem) {
+      this.shareItem = shareItem;
+      return this;
     }
   }
 
@@ -763,6 +769,7 @@ public class ForumTopicsController extends TelegramViewController<ForumTopicsCon
           tdlib.ui().post(() -> {
             // Create MessagesController directly to prevent re-opening in tabs mode
             MessagesController messagesController = new MessagesController(context, tdlib);
+            messagesController.setShareItem(getArguments().shareItem);
             messagesController.setArguments(new MessagesController.Arguments(null, chat, null, null, null, 0, null));
             // Remove this controller from stack after transition
             messagesController.addOneShotFocusListener(() -> {
@@ -912,6 +919,7 @@ public class ForumTopicsController extends TelegramViewController<ForumTopicsCon
 
   private void openTopic (TdApi.ForumTopic topic) {
     MessagesController controller = new MessagesController(context, tdlib);
+    controller.setShareItem(getArguments().shareItem);
 
     // Calculate highlight position based on topic's last read message
     MessageId highlightMessageId = null;
@@ -946,6 +954,7 @@ public class ForumTopicsController extends TelegramViewController<ForumTopicsCon
 
   private void openTopicAtMessage (TdApi.ForumTopic topic, TdApi.Message message) {
     MessagesController controller = new MessagesController(context, tdlib);
+    controller.setShareItem(getArguments().shareItem);
 
     // Navigate to the specific found message with highlight
     MessageId highlightMessageId = new MessageId(chatId, message.id);

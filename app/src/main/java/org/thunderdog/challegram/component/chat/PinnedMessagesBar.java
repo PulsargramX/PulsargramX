@@ -62,6 +62,7 @@ import me.vkryl.core.MathUtils;
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.lambda.Destroyable;
 import tgx.td.MessageId;
+import tgx.td.Td;
 
 public class PinnedMessagesBar extends ViewGroup implements Destroyable, MessageListManager.ChangeListener, View.OnClickListener {
   private CustomRecyclerView recyclerView;
@@ -689,7 +690,8 @@ public class PinnedMessagesBar extends ViewGroup implements Destroyable, Message
       if (isLinkPreview()) {
         return StringUtils.equalsTo(this.linkPreviewUrl, b.linkPreviewUrl) && (this.linkPreviewContext == b.linkPreviewContext);
       } else if (isMessage()) {
-        return this.message.chatId == b.message.chatId && this.message.id == b.message.id;
+        return this.tdlib == b.tdlib && this.message == b.message &&
+          Td.equalsTo(this.quote, b.quote) && this.localPickedFile == b.localPickedFile;
       } else {
         throw new UnsupportedOperationException();
       }
@@ -719,7 +721,7 @@ public class PinnedMessagesBar extends ViewGroup implements Destroyable, Message
   }
 
   public void setMessageList (@Nullable MessageListManager messageList) {
-    if (this.messageList == messageList)
+    if (this.messageList == messageList && this.staticList == null)
       return;
     clearMessageList();
     this.messageList = messageList;
@@ -753,7 +755,6 @@ public class PinnedMessagesBar extends ViewGroup implements Destroyable, Message
       for (int i = 0; i < entries.size(); i++) {
         Entry oldEntry = this.staticList.get(i);
         Entry newEntry = entries.get(i);
-        // TODO better check
         if (!oldEntry.equals(newEntry)) {
           contentEquals = false;
           break;

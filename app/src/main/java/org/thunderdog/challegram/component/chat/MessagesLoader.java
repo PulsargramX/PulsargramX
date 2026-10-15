@@ -344,8 +344,8 @@ public class MessagesLoader implements Client.ResultHandler {
           }
           case TdApi.Error.CONSTRUCTOR: {
             Log.w(Log.TAG_MESSAGES_LOADER, "Received error: %s", TD.toErrorString(object));
-            if (isForumTopic() && specialMode == SPECIAL_MODE_NONE &&
-                !hasSearchFilter() && mergeMode == MERGE_MODE_NONE) {
+            if (mergeMode == MERGE_MODE_NONE) {
+              // A failed request cannot establish a history boundary.
               synchronized (lock) {
                 lastHandler = null;
               }
@@ -1479,6 +1479,9 @@ public class MessagesLoader implements Client.ResultHandler {
     if (!combineWithMessages.isEmpty()) {
       final boolean bottom = loadingMode == MODE_MORE_BOTTOM;
       UI.post(() -> {
+        if (contextId != currentContextId) {
+          return;
+        }
         for (TdApi.Message message : combineWithMessages) {
           if (bottom) {
             bottomMessage.combineWith(message, true);
@@ -1615,7 +1618,8 @@ public class MessagesLoader implements Client.ResultHandler {
       scrollItemIndex = items.size() - i;
     }
 
-    int totalCount = items.size();
+    // Completing an existing album also advances the history boundary.
+    int totalCount = items.size() + combineWithMessages.size();
 
     if (scrollItemIndex != -1) {
       scrollItemIndex = items.size() - scrollItemIndex;
@@ -1806,6 +1810,9 @@ public class MessagesLoader implements Client.ResultHandler {
       }
       if (!canLoadBottom && !ignoreEndCheck) {
         manager.onBottomEndChecked();
+      }
+      if (items.isEmpty() && !combineWithMessages.isEmpty()) {
+        loadMore(loadingMode == MODE_MORE_TOP);
       }
       manager.ensureContentHeight();
     });

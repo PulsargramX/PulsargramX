@@ -2203,6 +2203,17 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
     }
   }
 
+  private TdApi.Function<TdApi.Messages> newAlbumHistoryRequest (TdApi.Message message, int offset,
+                                                               int limit, boolean onlyLocal) {
+    if (!onlyLocal && message.topicId instanceof TdApi.MessageTopicForum) {
+      return new TdApi.GetForumTopicHistory(message.chatId,
+        ((TdApi.MessageTopicForum) message.topicId).forumTopicId, message.id, offset, limit);
+    }
+    // TDLib has no cache-only topic history request. Filter the cached chat slice
+    // by topic below, then fill any missing album items from topic history.
+    return new TdApi.GetChatHistory(message.chatId, message.id, offset, limit, onlyLocal);
+  }
+
   public void getAlbum (List<TdApi.Message> album, boolean onlyLocal, @Nullable Album prevAlbum, @Nullable RunnableData<Album> callback) {
     TdApi.Message newestMessage = album.get(0);
     TdApi.Message oldestMessage = album.get(album.size() - 1);
@@ -2248,13 +2259,17 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
 
     int count = TdConstants.MAX_MESSAGE_GROUP_SIZE - album.size() + 1;
     if (!endFound.get()) {
-      client().send(new TdApi.GetChatHistory(oldestMessage.chatId, oldestMessage.id, 0, count, onlyLocal), result -> {
+      client().send(newAlbumHistoryRequest(oldestMessage, 0, count, onlyLocal), result -> {
         switch (result.getConstructor()) {
           case TdApi.Messages.CONSTRUCTOR: {
             TdApi.Message[] messages = ((TdApi.Messages) result).messages;
             for (TdApi.Message message : messages) {
               if (message.id >= oldestMessage.id)
                 continue;
+              if (oldestMessage.topicId instanceof TdApi.MessageTopicForum &&
+                  !Td.equalsTo(message.topicId, oldestMessage.topicId)) {
+                continue;
+              }
               if (message.mediaAlbumId != oldestMessage.mediaAlbumId) {
                 endFound.set(true);
                 break;
@@ -2277,13 +2292,17 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
       });
     }
     if (!startFound.get()) {
-      client().send(new TdApi.GetChatHistory(newestMessage.chatId, newestMessage.id, -count, count, onlyLocal), result -> {
+      client().send(newAlbumHistoryRequest(newestMessage, -count, count, onlyLocal), result -> {
         switch (result.getConstructor()) {
           case TdApi.Messages.CONSTRUCTOR: {
             TdApi.Message[] messages = ((TdApi.Messages) result).messages;
             for (int i = messages.length - 1; i >= 0; i--) {
               TdApi.Message message = messages[i];
               if (message.id <= newestMessage.id) {
+                continue;
+              }
+              if (newestMessage.topicId instanceof TdApi.MessageTopicForum &&
+                  !Td.equalsTo(message.topicId, newestMessage.topicId)) {
                 continue;
               }
               if (message.mediaAlbumId != newestMessage.mediaAlbumId) {

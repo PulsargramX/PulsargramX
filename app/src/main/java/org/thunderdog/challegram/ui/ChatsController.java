@@ -3028,7 +3028,7 @@ public class ChatsController extends TelegramViewController<ChatsController.Argu
   public void onChatCounterChanged (@NonNull TdApi.ChatList chatList, TdlibCounter counter, boolean availabilityChanged, int totalCount, int unreadCount, int unreadUnmutedCount) {
     if (totalCount == 0 && chatList.getConstructor() != TdApi.ChatListMain.CONSTRUCTOR && Td.equalsTo(this.chatList, chatList)) {
       runOnUiThreadOptional(() -> {
-        if (!isDestroyed() && !isBaseController()) {
+        if (!isDestroyed() && !isBaseController() && !isPicker()) {
           navigateBack();
         }
       });

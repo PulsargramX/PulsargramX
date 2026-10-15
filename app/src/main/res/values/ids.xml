@@ -193,6 +193,7 @@
   <item type="id" name="controller_emojiMedia" />
   <item type="id" name="controller_contacts" />
   <item type="id" name="controller_chats" />
+  <item type="id" name="controller_chatPicker" />
   <item type="id" name="controller_forumTopics" />
   <item type="id" name="controller_main" />
   <item type="id" name="controller_call_list" />

@@ -5410,7 +5410,13 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   public boolean canBeSelected () {
-    return (!isNotSent() || canResend()) && (flags & FLAG_UNSUPPORTED) == 0 && allowInteraction() && !isSponsoredMessage() && !messagesController().inSearchMode() && !isHiddenByMessagesFilter();
+    // Selecting the discussion post exposes its text selection and quote actions.
+    boolean selectableCommentHeader = isThreadHeader() && isMessageThread() &&
+      messagesController().getMessageThread().areComments() && hasSelectableTextTarget() &&
+      canBeSaved() && !isFakeMessage() && !isEventLog();
+    return (!isNotSent() || canResend()) && (flags & FLAG_UNSUPPORTED) == 0 &&
+      (allowInteraction() || selectableCommentHeader) && !isSponsoredMessage() &&
+      !messagesController().inSearchMode() && !isHiddenByMessagesFilter();
   }
 
   public boolean canBePinned () {

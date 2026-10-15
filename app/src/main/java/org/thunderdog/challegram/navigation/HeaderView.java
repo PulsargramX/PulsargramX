@@ -1891,7 +1891,11 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
   }
 
   public void closeSelectMode () { // Used by controllers
-    closeSelectMode(false, true);
+    closeSelectMode(true);
+  }
+
+  public void closeSelectMode (boolean animated) {
+    closeSelectMode(false, animated);
   }
 
   public void finishSelectMode () {
