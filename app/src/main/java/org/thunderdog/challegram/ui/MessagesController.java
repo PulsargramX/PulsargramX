@@ -12363,6 +12363,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
   }
 
   private void resetSearchControls (boolean animated) {
+    searchFromUserMessageId = null;
     lastMessageSearchQuery = "";
     lastMembersSearchQuery = "";
     onSetSearchTypeFilter(0);
@@ -12524,8 +12525,10 @@ public class MessagesController extends ViewController<MessagesController.Argume
 
   @Override
   protected void onLeaveSearchMode () {
-    if (searchFromUserMessageId != null) {
-      manager.setHighlightMessageId(searchFromUserMessageId, MessagesManager.HIGHLIGHT_MODE_WITHOUT_HIGHLIGHT);
+    MessageId returnMessageId = searchFromUserMessageId;
+    searchFromUserMessageId = null;
+    if (returnMessageId != null && returnMessageId.getChatId() == getChatId()) {
+      manager.setHighlightMessageId(returnMessageId, MessagesManager.HIGHLIGHT_MODE_WITHOUT_HIGHLIGHT);
     }
     onSetSearchFilteredShowMode(false);
     manager.onDestroySearch();

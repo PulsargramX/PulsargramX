@@ -319,9 +319,11 @@ public class MessagesSearchManagerMiddleware {
     int newTotalCount = Math.max(messagesTotalCount - this.discardedCount, args.foundMessages.length);
     if (totalCount != newTotalCount) {
       totalCount = newTotalCount;
+      final Delegate currentDelegate = delegate;
       tdlib.ui().post(() -> {
-        if (delegate != null) {
-          delegate.onUpdateTotalCount(newTotalCount);
+        if (args.contextId.equals(currentContextId) && currentDelegate != null &&
+            currentDelegate == delegate) {
+          currentDelegate.onUpdateTotalCount(newTotalCount);
         }
       });
     }
@@ -453,9 +455,9 @@ public class MessagesSearchManagerMiddleware {
     void onUpdateTotalCount (int newTotalCount);
   }
 
-  private Delegate delegate;
+  private @Nullable Delegate delegate;
 
-  public void setDelegate (Delegate delegate) {
+  public void setDelegate (@Nullable Delegate delegate) {
     this.delegate = delegate;
   }
 

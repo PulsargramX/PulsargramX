@@ -85,6 +85,13 @@ public class MessagesSearchManager {
   }
 
   private int reset (long chatId, TdApi.MessageTopic topicId, String input) {
+    if (searchRunnable != null) {
+      searchRunnable.cancel();
+      searchRunnable = null;
+    }
+    searchManagerMiddleware.setDelegate(null);
+    foundTargetMessageId = null;
+    currentSecretOffset = null;
     currentChatId = chatId;
     currentTopicId = topicId;
     currentInput = input;
@@ -119,17 +126,15 @@ public class MessagesSearchManager {
     currentDisplayedMessage = foundMsgId != null ? foundMsgId.getMessageId() : 0;
     currentSearchFilter = filter;
     searchManagerMiddleware.setDelegate(newTotalCount -> {
+      if (this.contextId != contextId) {
+        return;
+      }
       delegate.onSearchUpdateTotalCount(getMessageIndex(currentDisplayedMessage), currentTotalCount = newTotalCount, knownIndex(), knownTotalCount());
       currentTotalCount = newTotalCount;
     });
 
     flags |= FLAG_LOADING;
     delegate.showSearchResult(STATE_LOADING, 0, true, true, null);
-
-    if (searchRunnable != null) {
-      searchRunnable.cancel();
-      searchRunnable = null;
-    }
 
     searchRunnable = new CancellableRunnable() {
       @Override

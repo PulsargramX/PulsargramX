@@ -610,6 +610,10 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
 
   public void destroy (ViewController<?> context) {
     resetScroll();
+    if (searchManager != null) {
+      searchManager.onDismiss();
+    }
+    searchMiddleware.dismiss();
     returnToMessageIds = null;
     highlightMode = 0;
     tdlib.settings().removePinnedMessageDismissListener(this);
@@ -3491,6 +3495,9 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
 
   @Override
   public void showSearchResult (int index, int totalCount, boolean knownIndex, boolean knownTotalCount, MessageId messageId) {
+    if (messageId != null && messageId.getChatId() != loader.getChatId()) {
+      return;
+    }
     switch (index) {
       case MessagesSearchManager.STATE_LOADING: {
         controller.onChatSearchStarted();
