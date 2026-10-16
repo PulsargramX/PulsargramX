@@ -1,0 +1,112 @@
+--- a/td/telegram/DialogActionManager.cpp
++++ b/td/telegram/DialogActionManager.cpp
+@@ -251,6 +251,14 @@
+     }
+   }
+ 
++  bool is_bot = typing_dialog_type == DialogType::User &&
++                td_->user_manager_->is_user_bot(typing_dialog_id.get_user_id());
++  // Private bot topics can have independent actions from the same sender.
++  bool has_independent_topics = is_bot && dialog_type == DialogType::User;
++  auto matches_action = [=](const ActiveDialogAction &active_action) {
++    return active_action.typing_dialog_id == typing_dialog_id &&
++           (!has_independent_topics || active_action.top_thread_message_id == top_thread_message_id);
++  };
+   bool is_canceled = action == DialogAction();
+   if ((!is_canceled || message_content_type != MessageContentType::None) && typing_dialog_type == DialogType::User) {
+     td_->user_manager_->on_update_user_local_was_online(typing_dialog_id.get_user_id(), date);
+@@ -266,22 +274,18 @@
+   }
+ 
+   if (is_canceled) {
+-    // passed top_thread_message_id must be ignored
+     auto actions_it = active_dialog_actions_.find(dialog_id);
+     if (actions_it == active_dialog_actions_.end()) {
+       return;
+     }
+ 
+     auto &active_actions = actions_it->second;
+-    auto it = std::find_if(
+-        active_actions.begin(), active_actions.end(),
+-        [typing_dialog_id](const ActiveDialogAction &action) { return action.typing_dialog_id == typing_dialog_id; });
++    auto it = std::find_if(active_actions.begin(), active_actions.end(), matches_action);
+     if (it == active_actions.end()) {
+       return;
+     }
+ 
+-    if (!(typing_dialog_type == DialogType::User && td_->user_manager_->is_user_bot(typing_dialog_id.get_user_id())) &&
+-        !it->action.is_canceled_by_message_of_type(message_content_type)) {
++    if (!is_bot && !it->action.is_canceled_by_message_of_type(message_content_type)) {
+       return;
+     }
+ 
+@@ -299,9 +303,7 @@
+       return;
+     }
+     auto &active_actions = active_dialog_actions_[dialog_id];
+-    auto it = std::find_if(
+-        active_actions.begin(), active_actions.end(),
+-        [typing_dialog_id](const ActiveDialogAction &action) { return action.typing_dialog_id == typing_dialog_id; });
++    auto it = std::find_if(active_actions.begin(), active_actions.end(), matches_action);
+     MessageId prev_top_thread_message_id;
+     DialogAction prev_action;
+     if (it != active_actions.end()) {
+@@ -326,7 +328,25 @@
+     }
+   }
+ 
+-  if (top_thread_message_id.is_valid()) {
++  if (has_independent_topics) {
++    // Keep the chat indicator until this bot has no active actions in any topic.
++    DialogAction chat_action;
++    auto actions_it = active_dialog_actions_.find(dialog_id);
++    if (actions_it != active_dialog_actions_.end()) {
++      const auto &active_actions = actions_it->second;
++      auto it = std::find_if(active_actions.rbegin(), active_actions.rend(),
++                             [typing_dialog_id](const ActiveDialogAction &active_action) {
++                               return active_action.typing_dialog_id == typing_dialog_id;
++                             });
++      if (it != active_actions.rend()) {
++        chat_action = it->action.clone();
++      }
++    }
++    send_update_chat_action(dialog_id, MessageId(), typing_dialog_id, chat_action);
++    if (!top_thread_message_id.is_valid()) {
++      return;
++    }
++  } else if (top_thread_message_id.is_valid()) {
+     // duplicate per-thread message action to the chat itself
+     send_update_chat_action(dialog_id, MessageId(), typing_dialog_id, action);
+   }
+@@ -463,10 +483,8 @@
+   CHECK(!actions_it->second.empty());
+ 
+   auto now = Time::now();
+-  DialogId prev_typing_dialog_id;
+   while (actions_it->second[0].start_time + DIALOG_ACTION_TIMEOUT < now + 0.1) {
+-    CHECK(actions_it->second[0].typing_dialog_id != prev_typing_dialog_id);
+-    prev_typing_dialog_id = actions_it->second[0].typing_dialog_id;
++    auto action_count = actions_it->second.size();
+     on_dialog_action(dialog_id, actions_it->second[0].top_thread_message_id, actions_it->second[0].typing_dialog_id,
+                      DialogAction(), 0);
+ 
+@@ -475,6 +493,7 @@
+       return;
+     }
+     CHECK(!actions_it->second.empty());
++    CHECK(actions_it->second.size() < action_count);
+   }
+ 
+   LOG(DEBUG) << "Schedule next action timeout in " << dialog_id;
+--- a/td/telegram/MessagesManager.cpp
++++ b/td/telegram/MessagesManager.cpp
+@@ -5640,7 +5640,8 @@
+     return;
+   }
+ 
+-  td_->dialog_action_manager_->on_dialog_action(dialog_id, MessageId() /*ignored*/, get_message_sender(m),
++  auto top_thread_message_id = MessageId(ServerMessageId(get_message_topic(dialog_id, m).get_input_top_msg_id()));
++  td_->dialog_action_manager_->on_dialog_action(dialog_id, top_thread_message_id, get_message_sender(m),
+                                                 DialogAction(), m->date, m->content->get_type());
+ }
+ 
