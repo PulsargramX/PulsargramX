@@ -6678,6 +6678,10 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     return childAnimator == null || (childAnimator.getIntValue() & ANIMATION_FLAG_IGNORE_CHILD) != 0f || shouldApplySelectionFully() ? 0f : childAnimator.getFactor();
   }
 
+  public boolean shouldSelectAllOnLongPress (float x, float y) {
+    return getMessageCount() > 1;
+  }
+
   public final long findMessageIdUnder (float x, float y) {
     x -= getSelectableContentOffset(manager.getSelectableFactor());
     return findChildMessageIdUnder(x, y);

@@ -116,6 +116,7 @@ public class ChatPickerController extends ViewPagerController<ChatsController.Ar
     if (headerCell != null) {
       ViewPagerHeaderViewCompact header = (ViewPagerHeaderViewCompact) headerCell.getView();
       ChatFolderTab.configure(header, tdlib.settings().chatFolderStyle(), true, false);
+      header.setDistributeItems(true);
       // The folder row has its own line below the title and toolbar buttons.
       ViewGroup.MarginLayoutParams params =
         (ViewGroup.MarginLayoutParams) header.getRecyclerView().getLayoutParams();

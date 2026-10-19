@@ -553,7 +553,7 @@ public class ViewPagerTopView extends FrameLayoutFix implements RtlCheckListener
         if (BuildConfig.DEBUG && ((BackgroundView) child).index != index) {
           throw new IllegalStateException("BackgroundView.index = " + index + ", index = " + index);
         }
-        int itemWidth = item.getExpandedWidth() + itemPadding * 2;
+        int itemWidth = getItemExpandedWidth(index);
         if (itemWidth != child.getWidth()) {
           child.requestLayout();
         }
@@ -726,6 +726,15 @@ public class ViewPagerTopView extends FrameLayoutFix implements RtlCheckListener
     return getLayoutParams().width == ViewGroup.LayoutParams.WRAP_CONTENT;
   }
 
+  @Override
+  public void setMinimumWidth (int minWidth) {
+    if (getMinimumWidth() != minWidth) {
+      super.setMinimumWidth(minWidth);
+      lastMeasuredWidth = 0;
+      invalidate();
+    }
+  }
+
   @CheckResult
   private int calculateTotalWidth () {
     if (items == null || items.isEmpty()) {
@@ -784,8 +793,9 @@ public class ViewPagerTopView extends FrameLayoutFix implements RtlCheckListener
         }
         maxStableWidth = calculateMaxStableWidth(totalWidth);
       }
-      layout(totalWidth, /* wrapContent */ true); // must be before super.onMeasure
-      super.onMeasure(MeasureSpec.makeMeasureSpec(totalWidth, MeasureSpec.EXACTLY), heightMeasureSpec);
+      int width = Math.max(totalWidth, getMinimumWidth());
+      layout(width, /* wrapContent */ true); // must be before super.onMeasure
+      super.onMeasure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY), heightMeasureSpec);
     } else {
       super.onMeasure(widthMeasureSpec, heightMeasureSpec);
       layout(getMeasuredWidth(),  /* wrapContent */ false); // must be after super.onMeasure
@@ -911,11 +921,31 @@ public class ViewPagerTopView extends FrameLayoutFix implements RtlCheckListener
 
   private int getItemWidth (int itemIndex, float selectionFactor) {
     float labelFactor = getLabelFactor(itemIndex, selectionFactor);
-    return itemPadding * 2 + items.get(itemIndex).getWidth(labelFactor);
+    return itemPadding * 2 + items.get(itemIndex).getWidth(labelFactor) +
+      getAdditionalItemWidth(itemIndex, selectionFactor);
   }
 
   private int getItemExpandedWidth (int itemIndex) {
-    return itemPadding * 2 + items.get(itemIndex).getExpandedWidth();
+    return itemPadding * 2 + items.get(itemIndex).getExpandedWidth() +
+      getAdditionalItemWidth(itemIndex, selectionFactor);
+  }
+
+  private int getAdditionalItemWidth (int itemIndex, float selectionFactor) {
+    int minimumWidth = getMinimumWidth();
+    if (minimumWidth == 0 || getItemCount() == 0) {
+      return 0;
+    }
+    int itemsWidth = totalWidth;
+    if (showLabelOnActiveOnly) {
+      itemsWidth = 0;
+      for (int i = 0; i < items.size(); i++) {
+        itemsWidth += itemPadding * 2 + items.get(i).getWidth(getLabelFactor(i, selectionFactor));
+      }
+    }
+    int remainingWidth = Math.max(0, minimumWidth - itemsWidth);
+    int count = items.size();
+    // Divide the spare pixels between tabs without leaving a remainder at the end.
+    return remainingWidth * (itemIndex + 1) / count - remainingWidth * itemIndex / count;
   }
 
   public void updateAnchorPosition (boolean animated) {
@@ -1073,14 +1103,15 @@ public class ViewPagerTopView extends FrameLayoutFix implements RtlCheckListener
       boolean rtl = Lang.rtl();
 
       int selectionHeight = Screen.dp(SELECTION_HEIGHT);
-      int selectionLeft = rtl ? this.totalWidth - this.selectionLeft - this.selectionWidth : this.selectionLeft;
+      int drawWidth = wrapContent ? getTotalWidth() : totalWidth;
+      int selectionLeft = rtl ? drawWidth - this.selectionLeft - this.selectionWidth : this.selectionLeft;
       int selectionRight = selectionLeft + this.selectionWidth;
       int selectionTop = this.drawSelectionAtTop ? 0 : viewHeight - selectionHeight;
       int selectionBottom = selectionTop + selectionHeight;
 
       c.drawRect(selectionLeft, selectionTop, selectionRight, selectionBottom, Paints.fillingPaint(disabledFactor == 0f ? selectionColor : ColorUtils.fromToArgb(selectionColor, textFromColor, disabledFactor)));
 
-      int cx = rtl ? totalWidth : 0;
+      int cx = rtl ? drawWidth : 0;
       int itemIndex = 0;
       int itemCount = items.size();
       for (int i = 0; i < itemCount; i++) {
@@ -1096,7 +1127,7 @@ public class ViewPagerTopView extends FrameLayoutFix implements RtlCheckListener
 
         final int itemWidth;
         if (wrapContent) {
-          itemWidth = item.getWidth(labelFactor) + itemPadding * 2;
+          itemWidth = getItemWidth(i, selectionFactor);
         } else {
           itemWidth = commonItemWidth;
         }
@@ -1595,21 +1626,21 @@ public class ViewPagerTopView extends FrameLayoutFix implements RtlCheckListener
 
   public int getTotalWidth () {
     if (shouldWrapContent()) {
-      return totalWidth;
+      return Math.max(totalWidth, getMinimumWidth());
     }
     return getMeasuredWidth();
   }
 
   public int getMaxStableWidth () {
     if (shouldWrapContent()) {
-      return showLabelOnActiveOnly ? maxStableWidth : totalWidth;
+      return Math.max(showLabelOnActiveOnly ? maxStableWidth : totalWidth, getMinimumWidth());
     }
     return getMeasuredWidth();
   }
 
   public int getItemsWidth (float selectionFactor) {
     if (!showLabelOnActiveOnly || getChildCount() == 0) {
-      return totalWidth;
+      return shouldWrapContent() ? getTotalWidth() : totalWidth;
     }
     int itemsWidth = 0;
     for (int itemIndex = 0; itemIndex < items.size(); itemIndex++) {

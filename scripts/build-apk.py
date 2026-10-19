@@ -18,6 +18,7 @@ import time
 
 
 SOURCE = Path(__file__).resolve().parent.parent
+BUILD_TOOLS = ("git", "make", "g++", "gperf", "php")
 SPEC = importlib.util.spec_from_file_location("release", SOURCE / "scripts/verify-release.py")
 RELEASE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(RELEASE)
@@ -146,6 +147,10 @@ def java25():
   return None
 
 
+def missing_build_tools():
+  return [tool for tool in BUILD_TOOLS if not shutil.which(tool)]
+
+
 def invalid_binaries(project, names):
   invalid = []
   for name in names:
@@ -199,6 +204,10 @@ def worker(project, cache, edition):
     raise BuildError("JDK 25 is required; install it in the selected build environment.")
   os.environ["JAVA_HOME"] = str(jdk)
   os.environ["PATH"] = str(jdk / "bin") + os.pathsep + os.environ["PATH"]
+  missing = missing_build_tools()
+  if missing:
+    raise BuildError("Required build tools are missing: " + ", ".join(missing) +
+                     ". Install them in the selected build environment.")
   local = RELEASE.read_properties(project / "local.properties")
   version = RELEASE.read_properties(project / "version.properties")
   for key in ("app.experimental", "app.disable_signing", "app.dontobfuscate"):
@@ -213,9 +222,6 @@ def worker(project, cache, edition):
     raise BuildError("Set sdk.dir in local.properties to an absolute Android SDK path.")
   if not any((sdk / "platforms").glob("android-" + version["version.sdk_compile"] + "*")):
     raise BuildError("Install SDK platform " + version["version.sdk_package"] + ".")
-  for tool in ("git", "make"):
-    if not shutil.which(tool):
-      raise BuildError(f"Required build tool is missing: {tool}")
   for directory in (sdk / "ndk" / version["version.ndk_primary"],
                     sdk / "cmake" / version["version.cmake"],
                     sdk / "build-tools" / version["version.build_tools"]):
@@ -282,8 +288,8 @@ def main():
     "Success prints only the absolute APK path. Builds committed HEAD by default; "
     "--working-tree includes tracked edits (stage new files first). "
     "Private cache and logs: build/local-apk, or TGX_BUILD_CACHE_DIR. "
-    "Requires configured local.properties, Android SDK, and JDK 25 on the host "
-    "or in the configured development container."
+    "Requires configured local.properties, Android SDK, JDK 25, and "
+    "git, make, g++, gperf and PHP on the host or in the configured development container."
   ))
   parser.add_argument("--edition", choices=("personal", "public"), default="personal",
                       help="personal (default, local overlay) or public")
@@ -292,7 +298,8 @@ def main():
                       help="also include tracked, uncommitted edits; requires HEAD")
   parser.add_argument("--output-dir", type=Path, default=SOURCE / "builds")
   parser.add_argument("--container", default="auto",
-                      help="auto, host, or a Distrobox name (default: auto)")
+                      help=("auto (host with all build tools, otherwise Distrobox), "
+                            "host, or a Distrobox name"))
   parser.add_argument("--worker", nargs=2, metavar=("PROJECT", "CACHE"), help=argparse.SUPPRESS)
   args = parser.parse_args()
   os.umask(0o077)
@@ -369,9 +376,11 @@ def main():
           apply_working_patch(project, saved_patch, patch)
         command = [sys.executable, str(Path(__file__).resolve()), "--edition", args.edition, "--worker",
                    str(project), str(cache)]
-        if args.container != "host" and (args.container != "auto" or not java25()):
+        if args.container != "host" and (args.container != "auto" or not java25() or
+                                         missing_build_tools()):
           if not shutil.which("distrobox"):
-            raise BuildError("JDK 25 is missing on the host and Distrobox is unavailable.")
+            raise BuildError("The host requires JDK 25 and " + ", ".join(BUILD_TOOLS) +
+                             "; Distrobox is unavailable for the selected build environment.")
           container_file = SOURCE / ".personal/container"
           default_container = (container_file.read_text().strip() if container_file.is_file()
                                else os.environ.get("TGX_BUILD_CONTAINER", "client-dev"))

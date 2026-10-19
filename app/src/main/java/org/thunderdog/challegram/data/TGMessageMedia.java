@@ -519,6 +519,13 @@ public class TGMessageMedia extends TGMessage {
   }
 
   @Override
+  public boolean shouldSelectAllOnLongPress (float x, float y) {
+    x -= getSelectableContentOffset(manager.getSelectableFactor());
+    return super.shouldSelectAllOnLongPress(x, y) &&
+      mosaicWrapper.findMediaWrapperUnder(x, y) == null;
+  }
+
+  @Override
   public long findChildMessageIdUnder (float x, float y) {
     MediaWrapper wrapper = mosaicWrapper.findMediaWrapperUnder(x, y);
     if (wrapper != null) {

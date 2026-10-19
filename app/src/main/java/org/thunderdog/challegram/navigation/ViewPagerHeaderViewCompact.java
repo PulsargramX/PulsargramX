@@ -127,6 +127,7 @@ public class ViewPagerHeaderViewCompact extends FrameLayoutFix implements PagerH
 
   private final A adapter;
   private final RecyclerView recyclerView;
+  private boolean distributeItems;
 
   private @Dimension(unit = Dimension.DP) float fadingEdgeLength;
 
@@ -148,6 +149,17 @@ public class ViewPagerHeaderViewCompact extends FrameLayoutFix implements PagerH
       {
         paint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.DST_OUT));
         paint.setShader(new LinearGradient(0, 0, 1, 0, Color.BLACK, 0, Shader.TileMode.CLAMP));
+      }
+
+      @Override
+      protected void onMeasure (int widthMeasureSpec, int heightMeasureSpec) {
+        if (distributeItems) {
+          int width = MeasureSpec.getMode(widthMeasureSpec) != MeasureSpec.UNSPECIFIED ?
+            MeasureSpec.getSize(widthMeasureSpec) - getPaddingLeft() - getPaddingRight() : 0;
+          // Fill short rows while allowing their natural width to exceed the viewport.
+          topView.setMinimumWidth(Math.max(0, width));
+        }
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
       }
 
       @Override
@@ -223,6 +235,16 @@ public class ViewPagerHeaderViewCompact extends FrameLayoutFix implements PagerH
   }
 
   private boolean hasUserInteraction, resetUserInteraction;
+
+  public void setDistributeItems (boolean distributeItems) {
+    if (this.distributeItems != distributeItems) {
+      this.distributeItems = distributeItems;
+      if (!distributeItems) {
+        getTopView().setMinimumWidth(0);
+      }
+      recyclerView.requestLayout();
+    }
+  }
 
   public void setFadingEdgeLength (@Dimension(unit = Dimension.DP) float length) {
     if (fadingEdgeLength != length) {

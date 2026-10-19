@@ -176,5 +176,5 @@ if __name__ == "__main__":
   try:
     main()
   except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
-    print(str(error), file=sys.stderr)
+    print("error: " + str(error), file=sys.stderr)
     sys.exit(1)

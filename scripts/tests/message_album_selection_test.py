@@ -20,6 +20,16 @@ class MessageAlbumSelectionTest(unittest.TestCase):
             "private boolean performLongPress ()",
             "private void onLongPress ()",
         ))
+        message = read("app/src/main/java/org/thunderdog/challegram/data/TGMessage.java")
+        message_methods = "\n".join(java_method(message, signature) for signature in (
+            "public boolean shouldSelectAllOnLongPress (",
+            "public final long findMessageIdUnder (",
+        ))
+        media = read("app/src/main/java/org/thunderdog/challegram/data/TGMessageMedia.java")
+        media_methods = "\n".join(java_method(media, signature) for signature in (
+            "public boolean shouldSelectAllOnLongPress (",
+            "public long findChildMessageIdUnder (",
+        ))
         harness = r'''
 import java.util.*;
 public class MessageAlbumSelectionHarness {
@@ -46,18 +56,51 @@ public class MessageAlbumSelectionHarness {
   static class TGMessage {
     final List<Long> ids = new ArrayList<>();
     boolean notSent, selectable = true, consumed;
-    float textTranslation;
+    float textTranslation, selectableOffset;
+    final MessagesManager manager = new MessagesManager();
     TGMessage(int count) { for (long id = 1; id <= count; id++) ids.add(id); }
-    long findMessageIdUnder(float x, float y) {
-      // Media cells and the caption identify a constituent message; row space does not.
+    long findChildMessageIdUnder(float x, float y) {
       if (x < 0) return 0;
       return y > 0 ? ids.get(0) : ids.get((int) x);
     }
+    float getSelectableContentOffset(float factor) { return selectableOffset * factor; }
+    MESSAGE_METHODS
     int getMessageCount() { return ids.size(); }
     boolean isNotSent() { return notSent; }
     boolean canBeSelected() { return selectable; }
     float getMessageTextSelectionTranslationX() { return textTranslation; }
     boolean performLongPress(Object view, float x, float y) { return consumed; }
+  }
+  static class MessagesManager {
+    float selectableFactor;
+    float getSelectableFactor() { return selectableFactor; }
+  }
+  static class MediaWrapper {
+    final long id;
+    MediaWrapper(long id) { this.id = id; }
+    long getSourceMessageId() { return id; }
+  }
+  static class MosaicWrapper {
+    final List<Long> ids;
+    MosaicWrapper(List<Long> ids) { this.ids = ids; }
+    MediaWrapper findMediaWrapperUnder(float x, float y) {
+      return y == 0 && x >= 0 && x < ids.size() ?
+        new MediaWrapper(ids.get((int) x)) : null;
+    }
+  }
+  static class TextWrapper {
+    boolean containsSelectionArea(float x, float y) { return x >= 0 && y == 1; }
+  }
+  static class TGMessageMedia extends TGMessage {
+    final MosaicWrapper mosaicWrapper;
+    TextWrapper wrapper = new TextWrapper();
+    final long captionMessageId;
+    TGMessageMedia(int count) {
+      super(count);
+      mosaicWrapper = new MosaicWrapper(ids);
+      captionMessageId = ids.get(count - 1);
+    }
+    MEDIA_METHODS
   }
   static class TGMessageBotInfo extends TGMessage { TGMessageBotInfo() { super(1); } }
   static class TGMessageRich extends TGMessage {
@@ -106,28 +149,38 @@ public class MessageAlbumSelectionHarness {
     return view;
   }
   public static void main(String[] args) {
-    // Holding any tile, its caption or the row margin must enter selection with
-    // the same complete album, for either generic or media-handled touch events.
+    // Tile holds select one item; caption, header and margin holds select the album.
+    // Exercise both touch paths and content offsets while selection mode is closing.
     for (int count : new int[] {2, 8, 10}) {
       for (int touchFlag : new int[] {FLAG_CAUGHT_CLICK, FLAG_CAUGHT_MESSAGE_TOUCH}) {
-        for (float[] point : new float[][] {
-            {0, 0}, {count / 2, 0}, {count - 1, 0}, {0, 1}, {-1, 0}}) {
-          TGMessage album = new TGMessage(count);
-          MessagesController controller = new MessagesController();
-          MessageAlbumSelectionHarness view = hold(album, controller, point[0], point[1], touchFlag);
-          check(controller.selected.equals(new HashSet<>(album.ids)),
-            "Initial album hold must select all " + count + " items at " + Arrays.toString(point));
-          check(controller.albumCalls == 1 && controller.individualCalls == 0,
-            "Enter selection through the album selection operation");
-          check(view.longPressed && view.haptic && view.flags == 0,
-            "Consume the hold and keep ordinary selection haptics");
+        for (float offset : new float[] {-28, 0, 28}) {
+          for (float[] point : new float[][] {
+              {0, 0}, {count / 2, 0}, {count - 1, 0}, {0, 1}, {-1, 0}, {0, -1}}) {
+            TGMessageMedia album = new TGMessageMedia(count);
+            album.selectableOffset = offset;
+            album.manager.selectableFactor = 1;
+            MessagesController controller = new MessagesController();
+            MessageAlbumSelectionHarness view = hold(
+              album, controller, point[0] + offset, point[1], touchFlag);
+            boolean tile = point[0] >= 0 && point[1] == 0;
+            Set<Long> expected = tile ? Set.of(album.ids.get((int) point[0])) :
+              new HashSet<>(album.ids);
+            check(controller.selected.equals(expected),
+              "Wrong selection for " + count + " items at " + Arrays.toString(point) +
+              " with offset " + offset + ": " + controller.selected);
+            check(controller.albumCalls == (tile ? 0 : 1) &&
+                  controller.individualCalls == (tile ? 1 : 0),
+              "Use individual selection only for a media tile");
+            check(view.longPressed && view.haptic && view.flags == 0,
+              "Consume the hold and keep ordinary selection haptics");
+          }
         }
       }
     }
 
-    TGMessage album = new TGMessage(8);
+    TGMessageMedia album = new TGMessageMedia(8);
     MessagesController controller = new MessagesController();
-    hold(album, controller, 0, 0, FLAG_CAUGHT_MESSAGE_TOUCH);
+    hold(album, controller, 0, 1, FLAG_CAUGHT_MESSAGE_TOUCH);
     selectMessage(controller, album, 3, 0);
     check(controller.selected.size() == 7 && !controller.selected.contains(4L),
       "Selection-mode taps must still toggle only the touched album item");
@@ -137,6 +190,9 @@ public class MessageAlbumSelectionHarness {
     selectMessage(controller, album, 3, 0);
     check(controller.selected.size() == 7 && controller.selected.contains(4L),
       "Individual items can be reselected");
+    hold(album, controller, 0, 1, FLAG_CAUGHT_CLICK);
+    check(controller.selected.size() == 6 && !controller.selected.contains(album.captionMessageId),
+      "Selection-mode caption holds keep toggling the caption's constituent message");
     hold(album, controller, -1, 0, FLAG_CAUGHT_CLICK);
     check(controller.selected.size() == 8, "Row-space holds complete a partial album selection");
     selectMessage(controller, album, -1, 0);
@@ -144,20 +200,36 @@ public class MessageAlbumSelectionHarness {
       "Row-space taps still clear a complete album selection");
 
     controller = new MessagesController();
-    hold(new TGMessage(1), controller, 0, 0, FLAG_CAUGHT_MESSAGE_TOUCH);
+    hold(new TGMessageMedia(1), controller, 0, 0, FLAG_CAUGHT_MESSAGE_TOUCH);
     check(controller.selected.equals(Set.of(1L)) && controller.individualCalls == 1 &&
           controller.albumCalls == 0,
       "Keep single-message selection and its text-selection hint path");
 
+    controller = new MessagesController();
+    hold(new TGMessage(8), controller, 3, 0, FLAG_CAUGHT_MESSAGE_TOUCH);
+    check(controller.selected.size() == 8 && controller.albumCalls == 1,
+      "Keep initial whole-group selection for non-media groups");
+
+    controller = new MessagesController();
+    album = new TGMessageMedia(8);
+    album.wrapper = null;
+    hold(album, controller, 5, 0, FLAG_CAUGHT_MESSAGE_TOUCH);
+    check(controller.selected.equals(Set.of(6L)), "Captionless albums still select the held tile");
+    hold(album, controller, 5, 0, FLAG_CAUGHT_CLICK);
+    check(controller.selected.isEmpty() && !controller.selectMode,
+      "Holding a selected tile toggles it off");
+    hold(album, controller, -1, 0, FLAG_CAUGHT_CLICK);
+    check(controller.selected.size() == 8, "Captionless album margins select the whole group");
+
     // Native long-press actions and caption text selection retain precedence.
     controller = new MessagesController();
-    album = new TGMessage(8);
+    album = new TGMessageMedia(8);
     album.consumed = true;
     MessageAlbumSelectionHarness view = hold(album, controller, 0, 0, FLAG_CAUGHT_MESSAGE_TOUCH);
     check(controller.selected.isEmpty() && view.longPressed,
       "A handled media/link action must not also select the album");
     album.consumed = false;
-    hold(album, controller, 0, 0, FLAG_CAUGHT_MESSAGE_TOUCH);
+    hold(album, controller, 0, 1, FLAG_CAUGHT_MESSAGE_TOUCH);
     view = new MessageAlbumSelectionHarness(album, controller);
     view.textSelection = new MessageTextSelectionManager();
     view.textSelection.start = true;
@@ -201,7 +273,11 @@ public class MessageAlbumSelectionHarness {
 '''
         with tempfile.TemporaryDirectory(prefix="message-album-selection-") as directory:
             java = Path(directory) / "MessageAlbumSelectionHarness.java"
-            java.write_text(harness.replace("METHODS", methods), encoding="utf-8")
+            java.write_text(
+                harness.replace("MESSAGE_METHODS", message_methods)
+                .replace("MEDIA_METHODS", media_methods).replace("METHODS", methods),
+                encoding="utf-8",
+            )
             compiled = subprocess.run(
                 ["javac", "--release", "17", "-d", directory, str(java)],
                 capture_output=True, text=True,
