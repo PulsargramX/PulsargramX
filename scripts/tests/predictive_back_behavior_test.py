@@ -12,6 +12,196 @@ from message_options_keyboard_source_test import java_method, read
 
 @unittest.skipUnless(shutil.which("javac") and shutil.which("java"), "Requires a JDK")
 class PredictiveBackBehaviorTest(unittest.TestCase):
+    def test_cancel_keeps_controller_layers_without_queued_swaps(self) -> None:
+        navigation = read(
+            "app/src/main/java/org/thunderdog/challegram/navigation/NavigationController.java"
+        )
+        methods = "\n".join(java_method(navigation, signature) for signature in (
+            "public void prepareFactorAnimation (", "public void setLayerType (",
+            "private void finishTransaction (", "private void clearPreview ()",
+        ))
+        harness = r"""
+import java.util.*;
+public class PredictiveBackLayersTest {
+  @interface PredictiveGesture {
+    int NONE=0, BACK_FROM_LEFT_EDGE=1, BACK_FROM_RIGHT_EDGE=2;
+  }
+  static class View {
+    static final int VISIBLE=0, GONE=8;
+    static final int LAYER_TYPE_NONE=0, LAYER_TYPE_SOFTWARE=1, LAYER_TYPE_HARDWARE=2;
+    int layerType;
+    void setVisibility(int value) {}
+    void setTranslationX(float value) {}
+    void setTranslationY(float value) {}
+    void setAlpha(float value) {}
+  }
+  static class Views {
+    static final boolean HARDWARE_LAYER_ENABLED=true;
+    static final List<Runnable> pending = new ArrayList<>();
+    static void setLayerType(View view, int type) {
+      pending.add(() -> view.layerType=type);
+    }
+    static void flush() { pending.forEach(Runnable::run); pending.clear(); }
+  }
+  static class Settings {
+    static final int SETTING_FLAG_FORCE_DEFAULT_ANIMATION_FOR_RIGHT_SWIPE_EDGE=1;
+    static final Settings INSTANCE=new Settings();
+    boolean reduced;
+    static Settings instance() { return INSTANCE; }
+    boolean needReduceMotion() { return reduced; }
+    boolean getNewSetting(int flag) { return false; }
+  }
+  static class SimpleShapeDrawable { static final boolean USE_SOFTWARE_SHADOW=false; }
+  static class Size {
+    static final float NAVIGATION_PREVIEW_TRANSLATE_FACTOR=4;
+    static int getNavigationShadowvertSize() { return 8; }
+    static int getNavigationShadowSize() { return 8; }
+  }
+  static class Filling {
+    void setRestorePixels(boolean restore, float offset, int color) {}
+  }
+  static class HeaderView {
+    Filling getFilling() { return new Filling(); }
+    void setTranslation(float factor) {}
+    void clearPreview() {}
+    void applyPreview(ViewController<?> controller) {}
+  }
+  static class Root {
+    boolean capture=true;
+    boolean prepareBackHeader(HeaderView header, View button) { return capture; }
+    int getMeasuredWidth() { return 1000; }
+    int getMeasuredHeight() { return 2000; }
+  }
+  static class ViewController<T> {
+    final View view=new View();
+    boolean popup;
+    int focuses, blurs;
+    View getValue() { return view; }
+    boolean usePopupMode() { return popup; }
+    boolean allowLayerTypeChanges() { return true; }
+    boolean useDropShadow() { return true; }
+    int getPopupRestoreColor() { return 0; }
+    int getHeaderHeight() { return 56; }
+    void applyPlayerOffset(float factor, float offset) {}
+    void onFocus() { focuses++; }
+    void onBlur() { blurs++; }
+  }
+  static class Stack {
+    final ViewController<?> previous=new ViewController<>(), current=new ViewController<>();
+    ViewController<?> getPrevious() { return previous; }
+    ViewController<?> getCurrent() { return current; }
+  }
+  static class Navigation {
+    static final int TRANSLATION_HORIZONTAL=1, TRANSLATION_VERTICAL=2, TRANSLATION_FADE=3;
+    static final int TRANSLATION_NONE=4, TRANSLATION_PREDICTIVE=5;
+    static final int FINISH_NAVIGATION=1, FINISH_PREVIEW=2, FINISH_PREVIEW_FORCE=3;
+    static final boolean USE_PREVIEW_FADE=true, DROP_SHADOW_ENABLED=true;
+    static final boolean USE_PREVIEW_TRANSLATION=true;
+    static final float PREVIEW_FADED_FACTOR=.6f, PREVIEW_FADE_CHANGE_FACTOR=.1f;
+    final Stack stack=new Stack();
+    final Root rootView=new Root();
+    final HeaderView headerView=new HeaderView();
+    final View floatingButton=new View(), fadeView=new View();
+    final View shadowView=new View(), shadowTop=new View();
+    boolean forceRtlAnimation, systemBackHasHeaderPreview, systemBackActive, translatingForward;
+    float translationFactor, lastTranslation, lastHeaderFactor, fromHeaderHeight;
+    float currentPlayerFactor, currentPlayerOffset, currentWidth, currentHeight, currentPrevWidth;
+    int translationMode;
+    ViewController<?> currentLeft, currentRight;
+    View leftWrap, rightWrap;
+    final Processor processor=new Processor();
+    class Processor {
+      void setPrevAsCurrent() {}
+      void removePrevious(ViewController<?> controller) {}
+    }
+    Stack getStack() { return stack; }
+    void preventLayout() {}
+    void checkShadowDirection() {}
+    void addChildWrapper(ViewController<?> c) {}
+    void addChildWrapper(ViewController<?> c, int index) {}
+    void removeChildWrapper(ViewController<?> c) {}
+    void preventPopupMode(ViewController<?> c) {}
+    void applyPopupMode(ViewController<?> c) {}
+    void showFadeView() {}
+    void removeFadeView() {}
+    void prepareHeaderAnimation(ViewController<?> l, ViewController<?> r, boolean f, int d, boolean rtl) {}
+    void layoutIfRequested() {}
+    void onAfterShow() {}
+    void preventNextLayouts(int limit) {}
+    void completeNextLayout() {}
+    void clearSystemBackState() { systemBackActive=false; }
+    void updateHackyViews() {}
+    void setFactor(float factor) { translationFactor=factor; }
+    __METHODS__
+  }
+  static void check(boolean condition, String message) {
+    if (!condition) throw new AssertionError(message);
+  }
+  public static void main(String[] args) {
+    for (int initialLayer : new int[] {View.LAYER_TYPE_NONE, View.LAYER_TYPE_HARDWARE,
+                                      View.LAYER_TYPE_SOFTWARE}) {
+      for (int edge : new int[] {PredictiveGesture.BACK_FROM_LEFT_EDGE,
+                                PredictiveGesture.BACK_FROM_RIGHT_EDGE}) {
+        for (int finish : new int[] {Navigation.FINISH_PREVIEW, Navigation.FINISH_PREVIEW_FORCE,
+                                    Navigation.FINISH_NAVIGATION}) {
+          Navigation n=new Navigation();
+          n.stack.current.view.layerType=initialLayer;
+          n.stack.previous.view.layerType=View.LAYER_TYPE_SOFTWARE;
+          for (int gesture=0; gesture<3; gesture++) {
+            n.prepareFactorAnimation(n.stack.previous,n.stack.current,false,
+              Navigation.TRANSLATION_HORIZONTAL,edge);
+            check(n.translationMode==Navigation.TRANSLATION_PREDICTIVE,"Use predictive surfaces");
+            check(Views.pending.isEmpty(),"Gesture start must not queue a controller layer swap");
+            n.systemBackActive=true;
+            n.finishTransaction(finish);
+            check(Views.pending.isEmpty(),"Finishing must not queue a controller layer swap");
+            Views.flush();
+            check(n.stack.current.view.layerType==initialLayer,"Keep outgoing controller layer");
+            check(n.stack.previous.view.layerType==View.LAYER_TYPE_SOFTWARE,
+              "Keep destination controller layer");
+            check(n.currentLeft==null && n.currentRight==null,"Release preview references");
+            if (finish!=Navigation.FINISH_NAVIGATION) {
+              check(n.stack.current.focuses==gesture+1,"Restore focus after cancellation");
+            }
+          }
+        }
+      }
+    }
+    // Fallback is resolved before deciding whether this transition needs cached layers.
+    for (int fallback=0; fallback<4; fallback++) {
+      Navigation n=new Navigation();
+      Settings.INSTANCE.reduced=fallback==1;
+      n.rootView.capture=fallback!=2;
+      n.stack.previous.popup=fallback==3;
+      n.prepareFactorAnimation(n.stack.previous,n.stack.current,false,
+        Navigation.TRANSLATION_HORIZONTAL,fallback==0 ? PredictiveGesture.NONE :
+          PredictiveGesture.BACK_FROM_LEFT_EDGE);
+      check(n.translationMode!=Navigation.TRANSLATION_PREDICTIVE,"Use fallback or legacy mode");
+      Views.flush();
+      check(n.stack.current.view.layerType==View.LAYER_TYPE_HARDWARE,"Cache legacy transition");
+      n.finishTransaction(Navigation.FINISH_PREVIEW);
+      Views.flush();
+      check(n.stack.current.view.layerType==View.LAYER_TYPE_NONE,"Release legacy layer");
+      check(n.stack.previous.view.layerType==View.LAYER_TYPE_NONE,"Release destination layer");
+    }
+  }
+}
+"""
+        harness = harness.replace("__METHODS__", methods)
+        with tempfile.TemporaryDirectory(prefix="predictive-back-layers-test-") as directory:
+            java = Path(directory) / "PredictiveBackLayersTest.java"
+            java.write_text(harness, encoding="utf-8")
+            result = subprocess.run(
+                ["javac", "--release", "17", "-d", directory, str(java)],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            result = subprocess.run(
+                ["java", "-cp", directory, "PredictiveBackLayersTest"],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_status_strip_follows_surfaces_and_restores(self) -> None:
         root = read("app/src/main/java/org/thunderdog/challegram/navigation/RootLayout.java")
         parent = read("app/src/main/java/org/thunderdog/challegram/widget/BaseRootLayout.java")

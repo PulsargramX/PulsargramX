@@ -701,10 +701,6 @@ public class NavigationController implements Future<View>, ThemeChangeListener, 
 
   public void prepareFactorAnimation (ViewController<?> left, ViewController<?> right, boolean forward, int direction, @PredictiveGesture int predictiveGestureMode) {
     preventLayout();
-    if (Views.HARDWARE_LAYER_ENABLED) {
-      setLayerType(View.LAYER_TYPE_HARDWARE, left, right);
-    }
-
     boolean forceRtl = false;
 
     if (predictiveGestureMode != PredictiveGesture.NONE) {
@@ -729,6 +725,12 @@ public class NavigationController implements Future<View>, ThemeChangeListener, 
       if (!systemBackHasHeaderPreview) {
         direction = TRANSLATION_FADE;
       }
+    }
+
+    // RootLayout isolates predictive surfaces itself. Keep the controllers' existing layers
+    // throughout the gesture so queued layer changes cannot flash the chat on cancellation.
+    if (Views.HARDWARE_LAYER_ENABLED && direction != TRANSLATION_PREDICTIVE) {
+      setLayerType(View.LAYER_TYPE_HARDWARE, left, right);
     }
 
     if (forward) {
@@ -1350,7 +1352,7 @@ public class NavigationController implements Future<View>, ThemeChangeListener, 
     ViewController<?> current = getStack().getPrevious();
     removeFadeView();
 
-    if (Views.HARDWARE_LAYER_ENABLED) {
+    if (Views.HARDWARE_LAYER_ENABLED && translationMode != TRANSLATION_PREDICTIVE) {
       setLayerType(View.LAYER_TYPE_NONE, currentLeft, currentRight);
     }
 
