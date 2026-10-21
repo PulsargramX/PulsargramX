@@ -6,12 +6,16 @@ if(NOT ANDROID_NDK_MAJOR OR NOT ANDROID_NDK_REVISION)
   message(FATAL_ERROR "Unknown NDK: r${ANDROID_NDK_MAJOR} (${ANDROID_NDK_REVISION})")
 endif()
 
-if (NOT TGX_FLAVOR MATCHES "^(legacy|lollipop|marshmallow|latest)$")
+if (NOT TGX_FLAVOR MATCHES "^(legacy|lollipop|marshmallow|tens|qrs|latest)$")
   message(FATAL_ERROR "Unknown flavor: ${TGX_FLAVOR}")
 endif()
 
 if (NOT DEFINED ANDROID_MIN_SDK_VERSION)
   message(FATAL_ERROR "ANDROID_MIN_SDK_VERSION is not set")
+endif()
+
+if(NOT EXISTS "${ANDROID_NDK}")
+  message(FATAL_ERROR "ANDROID_NDK is not set")
 endif()
 
 # == Include ==
@@ -82,11 +86,28 @@ add_compile_options(
   "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-fvisibility-inlines-hidden>"
   # ThinLTO avoids merging WebRTC and the codecs into one large optimizer module.
   "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-flto=thin>"
-  "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-fno-unwind-tables>"
-  "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-fno-asynchronous-unwind-tables>"
 )
 
-if (ANDROID_MIN_SDK_VERSION GREATER_EQUAL 23)
+file(REAL_PATH "${ANDROID_NDK}" ANDROID_NDK_REAL_PATH) # @MadeByLLM("opus-5.5")
+
+add_compile_options(
+  "$<$<COMPILE_LANGUAGE:C,CXX,ASM>:-ffile-prefix-map=${TGX_ROOT_DIR}/=>"
+  "$<$<COMPILE_LANGUAGE:C,CXX,ASM>:-ffile-prefix-map=${ANDROID_NDK}/=ndk/>"
+  "$<$<COMPILE_LANGUAGE:C,CXX,ASM>:-ffile-prefix-map=${ANDROID_NDK_REAL_PATH}/=ndk/>" # @MadeByLLM("opus-5.5")
+  "$<$<COMPILE_LANGUAGE:C,CXX,ASM>:-ffile-prefix-map=${CMAKE_BINARY_DIR}=.cxx>"
+)
+
+if (ANDROID_MIN_SDK_VERSION GREATER_EQUAL 30)
+  add_link_options(
+    "-Wl,--pack-dyn-relocs=android+relr"
+    "-Wl,--no-use-android-relr-tags"
+  )
+elseif (ANDROID_MIN_SDK_VERSION GREATER_EQUAL 28)
+  add_link_options(
+    "-Wl,--pack-dyn-relocs=android+relr"
+    "-Wl,--use-android-relr-tags"
+  )
+elseif (ANDROID_MIN_SDK_VERSION GREATER_EQUAL 23)
   add_link_options(
     "-Wl,--pack-dyn-relocs=android"
   )

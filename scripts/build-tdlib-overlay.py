@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -115,13 +116,18 @@ def native(args, build, source, revision, env, cmake, ninja, log):
         raise RuntimeError(f"Hydrate the pinned OpenSSL LFS binary: {path}")
   state = build / "native-build" / args.ndk / platform / args.abi
   output = build / "native" / args.ndk / platform / args.abi
-  major = int(args.ndk.split(".")[0])
-  stl = "c++_shared" if major >= 27 else "c++_static"
+  prefix_map = shlex.join([
+    f"-ffile-prefix-map={source.resolve()}/=",
+    f"-ffile-prefix-map={openssl}/=openssl/",
+    f"-ffile-prefix-map={ndk}/=ndk/",
+    f"-ffile-prefix-map={ndk.resolve()}/=ndk/",
+  ])
   command([cmake, "-S", source / "example/android", "-B", state, "-G", "Ninja",
     "-DCMAKE_TOOLCHAIN_FILE=" + str(ndk / "build/cmake/android.toolchain.cmake"),
     "-DCMAKE_MAKE_PROGRAM=" + str(ninja), "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
     "-DANDROID_ABI=" + args.abi, "-DANDROID_PLATFORM=" + platform,
-    "-DANDROID_STL=" + stl, "-DTD_GIT_COMMIT_HASH=" + revision,
+    "-DANDROID_STL=c++_shared", "-DTD_GIT_COMMIT_HASH=" + revision,
+    "-DCMAKE_C_FLAGS=" + prefix_map, "-DCMAKE_CXX_FLAGS=" + prefix_map,
     "-DOPENSSL_ROOT_DIR=" + str(openssl), "-DOPENSSL_INCLUDE_DIR=" + str(openssl / "include"),
     "-DOPENSSL_CRYPTO_LIBRARY=" + str(crypto), "-DOPENSSL_SSL_LIBRARY=" + str(ssl),
     "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384"], log, env)

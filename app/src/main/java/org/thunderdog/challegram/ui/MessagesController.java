@@ -741,7 +741,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
       Views.setLayerType(messagesView, View.LAYER_TYPE_HARDWARE);
     }
 
-    manager.modifyRecycler(context, messagesView, messagesManager);
+    manager.modifyRecycler(messagesView, messagesManager);
 
     messageTextSelectionManager = new MessageTextSelectionManager(this, messagesView);
     RelativeLayout.LayoutParams textSelectionParams = new RelativeLayout.LayoutParams(
@@ -7528,7 +7528,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
           return !Td.equalsTo(oldText, newText);
         }
         default: {
-          Td.assertMessageContent_af730a78();
+          Td.assertMessageContent_f7758f8b();
           break;
         }
       }
@@ -7973,7 +7973,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
         break;
       }
       default: {
-        Td.assertMessageContent_af730a78();
+        Td.assertMessageContent_f7758f8b();
         throw Td.unsupported(editContext.message.content);
       }
     }

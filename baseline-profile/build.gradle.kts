@@ -1,5 +1,3 @@
-import tgx.gradle.*
-
 plugins {
   id("java-toolchain-convention")
   id(libs.plugins.android.test.get().pluginId)
@@ -15,16 +13,13 @@ android {
 
   targetProjectPath = ":app"
 
-  flavorDimensions += listOf("SDK", "ABI")
-  androidComponents.disableRudimentaryVariants { _, abiVariant ->
-    abiVariant.isTestingLab
-  }
+  flavorDimensions += arrayOf("EDITION", "SDK")
   productFlavors {
+    create(providers.gradleProperty("client.edition").orElse("public").get()) {
+      dimension = "EDITION"
+    }
     create(Sdk.VARIANTS[Sdk.LATEST]!!.flavor) {
       dimension = "SDK"
-    }
-    create(Abi.VARIANTS[Abi.LAB]!!.flavor) {
-      dimension = "ABI"
     }
   }
 

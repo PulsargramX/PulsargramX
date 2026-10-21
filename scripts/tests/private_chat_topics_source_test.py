@@ -130,7 +130,7 @@ class PrivateChatTopicsSourceTest(unittest.TestCase):
     def test_private_topic_chat_opens_topic_list_without_view_as_topics(self) -> None:
         ui = read("app/src/main/java/org/thunderdog/challegram/telegram/TdlibUi.java")
         self.assertIn("boolean privateChatWithTopics = tdlib.isPrivateChatWithTopics(chat);", ui)
-        self.assertIn("(privateChatWithTopics || chat.viewAsTopics)", ui)
+        self.assertIn("(privateChatWithTopics || chat.viewAsTopics ||", ui)
         self.assertIn("new ForumTopicsController", ui)
 
     def test_topic_scope_is_preserved_for_history_intents_and_sends(self) -> None:

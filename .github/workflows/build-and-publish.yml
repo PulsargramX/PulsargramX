@@ -225,7 +225,7 @@ jobs:
       - name: Find APK
         id: find_apk
         run: |
-          mapfile -t apks < <(find app/build/outputs/apk/publicLatestArm64/release -name '*.apk' -type f)
+          mapfile -t apks < <(find app/build/outputs/apk/publicLatest/release -name '*.apk' -type f)
           if [ "${#apks[@]}" -ne 1 ]; then
             echo "Expected exactly one arm64 release APK" >&2
             exit 1
@@ -266,7 +266,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: mapping-${{ matrix.flavor }}-${{ matrix.build_type }}
-          path: app/build/outputs/mapping/publicLatestArm64Release/*.txt
+          path: app/build/outputs/mapping/publicLatestRelease/*.txt
           retention-days: 90
           if-no-files-found: ignore
 

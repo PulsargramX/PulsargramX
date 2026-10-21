@@ -44,8 +44,9 @@ class UpstreamBuildCompatibilityTest(unittest.TestCase):
   def test_variant_helpers_reference_declared_abis(self):
     root = SCRIPTS.parent
     config = (root / "buildSrc/src/main/kotlin/Config.kt").read_text()
-    abi = config.split("object Abi {", 1)[1].split("\n}", 1)[0]
+    abi = config.split("enum class Abi(", 1)[1].split("\ndata class SdkVariant", 1)[0]
     declared = set(re.findall(r"\bval ([A-Z][A-Z_0-9]*)", abi))
+    declared.update(re.findall(r"^  ([A-Z][A-Z_0-9]*)\(\d+\)", abi, re.M))
     references = set(re.findall(r"\bAbi\.([A-Z][A-Z_0-9]*)",
                                config + (root / "app/build.gradle.kts").read_text()))
     self.assertEqual(references - declared, set())
@@ -104,11 +105,68 @@ class UpstreamBuildCompatibilityTest(unittest.TestCase):
                          "cmake", "ninja", None)
         self.assertIn(f"-DANDROID_PLATFORM={platform}", commands[-2])
         self.assertIn("-DOPENSSL_ROOT_DIR=" + str(crypto), commands[-2])
+        self.assertIn("-DANDROID_STL=c++_shared", commands[-2])
+        for language in ("C", "CXX"):
+          flags = next(arg for arg in commands[-2] if arg.startswith(f"-DCMAKE_{language}_FLAGS="))
+          self.assertIn(f"-ffile-prefix-map={root / 'source'}/=", flags)
+          self.assertIn(f"-ffile-prefix-map={root / 'sdk/ndk' / ndk}/=ndk/", flags)
       first = build / "native" / ndk / "android-23" / abi / "libtdjni.so"
       second = build / "native" / ndk / "android-24" / abi / "libtdjni.so"
       self.assertTrue(first.is_file())
       self.assertTrue(second.is_file())
       self.assertNotEqual(first.read_bytes(), second.read_bytes())
+
+
+class EditionReleaseBuildTest(unittest.TestCase):
+  def test_both_editions_use_sdk_variants_and_explicit_arm64_selection(self):
+    for edition in ("personal", "public"):
+      with self.subTest(edition=edition), tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        project, cache, sdk = root / "project", root / "cache", root / "sdk"
+        project.mkdir()
+        cache.mkdir()
+        for component in ("platforms/android-37", "ndk/30", "cmake/4", "build-tools/37"):
+          (sdk / component).mkdir(parents=True)
+        signing = root / "signing.properties"
+        signing.write_text("keystore.file=" + str(root / "release.jks") + "\n")
+        (project / "local.properties").write_text(
+          f"sdk.dir={sdk}\nkeystore.file={signing}\napp.public.keystore_file={signing}\n"
+          "app.id=example.personal\n")
+        (project / "version.properties").write_text(
+          "version.sdk_compile=37\nversion.ndk_primary=30\n"
+          "version.cmake=4\nversion.build_tools=37\n")
+        apk = project / "app/build/outputs/apk" / (edition + "Latest") / "release/client.apk"
+        apk.parent.mkdir(parents=True)
+        apk.touch()
+        with patch.dict(os.environ), patch.object(BUILD, "java25", return_value=root / "jdk"), \
+             patch.object(BUILD, "missing_build_tools", return_value=[]), \
+             patch.object(BUILD.RELEASE, "local_signing_config", return_value=(sdk, "certificate")), \
+             patch.object(BUILD.shutil, "which", return_value=None), \
+             patch.object(BUILD, "invalid_binaries", return_value=[]), \
+             patch.object(BUILD, "execute", return_value=0) as execute, \
+             patch.object(BUILD.subprocess, "run") as verify, patch("sys.stdout", io.StringIO()):
+          BUILD.worker(project, cache, edition)
+        self.assertEqual(execute.call_count, 2)
+        tasks = [call.args[0] for call in execute.call_args_list]
+        self.assertEqual([args[1] for args in tasks],
+                         [":app:externalNativeBuild" + edition.capitalize() + "LatestRelease",
+                          ":app:assemble" + edition.capitalize() + "LatestRelease"])
+        for args in tasks:
+          self.assertIn("-Pclient.edition=" + edition, args)
+          self.assertIn("-Pabi=arm64", args)
+        verification = verify.call_args.args[0]
+        self.assertEqual(verification[verification.index("--variant") + 1],
+                         edition + "LatestRelease")
+        self.assertIn(str(apk), verification)
+
+  def test_default_release_keeps_android_7_compatibility_and_arm64_support(self):
+    config = (SCRIPTS.parent / "buildSrc/src/main/kotlin/Config.kt").read_text()
+    latest = re.search(r'flavor = "latest",\s*minSdk = (\d+)', config)
+    self.assertIsNotNone(latest)
+    self.assertEqual(int(latest.group(1)), 24)
+    filters = re.search(r"val FILTERS = listOf\((.*?)\)", config, re.S)
+    self.assertIsNotNone(filters)
+    self.assertEqual(re.findall(r'"([^"]+)"', filters.group(1)), ["arm64-v8a"])
 
 
 class QuietGradleTest(unittest.TestCase):

@@ -318,7 +318,7 @@ public class ContentPreview {
     if (allowContent) {
       formattedText = Td.textOrCaption(message.content);
       if (type == TdApi.MessageRichMessage.CONSTRUCTOR) {
-        formattedText = RichMessageUtils.toSearchableText(
+        formattedText = RichMessageUtils.toPreviewText(
           ((TdApi.MessageRichMessage) message.content).message);
       }
       if (message.isOutgoing) {
@@ -364,7 +364,8 @@ public class ContentPreview {
         break;
       }
       case TdApi.MessageRichMessage.CONSTRUCTOR: {
-        break;
+        return getRichMessagePreview(((TdApi.MessageRichMessage) message.content).message,
+          formattedText);
       }
       case TdApi.MessageAnimatedEmoji.CONSTRUCTOR: {
         TdApi.MessageAnimatedEmoji animatedEmoji = (TdApi.MessageAnimatedEmoji) message.content;
@@ -884,13 +885,15 @@ public class ContentPreview {
       case TdApi.MessagePollOptionDeleted.CONSTRUCTOR:
       case TdApi.MessageChatAddedToCommunity.CONSTRUCTOR:
       case TdApi.MessageChatRemovedFromCommunity.CONSTRUCTOR:
+      case TdApi.MessageTonConnectRequest.CONSTRUCTOR:
+      case TdApi.MessageTonWalletTransfer.CONSTRUCTOR:
         break;
 
       // Bots only. Unused
       case TdApi.MessagePassportDataReceived.CONSTRUCTOR:
       case TdApi.MessageWebAppDataReceived.CONSTRUCTOR:
       default:
-        Td.assertMessageContent_af730a78();
+        Td.assertMessageContent_f7758f8b();
         throw Td.unsupported(message.content);
     }
     Refresher refresher = null;
@@ -941,6 +944,66 @@ public class ContentPreview {
       preview.setRefresher(refresher, true);
     }
     return preview;
+  }
+
+  private static ContentPreview getRichMessagePreview (@Nullable TdApi.RichMessage message,
+                                                       @Nullable TdApi.FormattedText text) {
+    int mediaType = 0;
+    int mediaCount = 0;
+    for (RichMessageUtils.MediaItem item : RichMessageUtils.media(message)) {
+      if (item.type == RichMessageUtils.MediaItem.INLINE_ICON) {
+        continue;
+      }
+      if (mediaCount == 0) {
+        mediaType = item.type;
+      } else if (mediaType != item.type) {
+        mediaType = -1;
+      }
+      mediaCount++;
+    }
+    if (mediaCount == 0) {
+      return new ContentPreview(null, R.string.YouHaveNewMessage, text, false);
+    }
+    Emoji emoji;
+    int placeholder;
+    int countRes = R.string.xMedia;
+    switch (mediaType) {
+      case RichMessageUtils.MediaItem.PHOTO:
+        emoji = mediaCount > 1 ? EMOJI_ALBUM_PHOTOS : EMOJI_PHOTO;
+        placeholder = R.string.ChatContentPhoto;
+        countRes = R.string.xPhotos;
+        break;
+      case RichMessageUtils.MediaItem.VIDEO:
+        emoji = mediaCount > 1 ? EMOJI_ALBUM_VIDEOS : EMOJI_VIDEO;
+        placeholder = R.string.ChatContentVideo;
+        countRes = R.string.xVideos;
+        break;
+      case RichMessageUtils.MediaItem.ANIMATION:
+        emoji = EMOJI_GIF;
+        placeholder = R.string.ChatContentAnimation;
+        break;
+      case RichMessageUtils.MediaItem.AUDIO:
+        emoji = mediaCount > 1 ? EMOJI_ALBUM_AUDIO : EMOJI_AUDIO;
+        placeholder = R.string.Audio;
+        countRes = R.string.xAudios;
+        break;
+      case RichMessageUtils.MediaItem.VOICE_NOTE:
+        emoji = EMOJI_VOICE;
+        placeholder = R.string.ChatContentVoice;
+        break;
+      case RichMessageUtils.MediaItem.MAP:
+        emoji = EMOJI_LOCATION;
+        placeholder = R.string.Location;
+        break;
+      default:
+        emoji = EMOJI_ALBUM_MEDIA;
+        placeholder = R.string.YouHaveNewMessage;
+        break;
+    }
+    if (mediaCount > 1 && Td.isEmpty(text)) {
+      return new ContentPreview(emoji, 0, Lang.plural(countRes, mediaCount), true);
+    }
+    return new ContentPreview(emoji, placeholder, text, false);
   }
 
   public static ContentPreview getAlbumPreview (Tdlib tdlib, TdApi.Message message, Tdlib.Album album, boolean allowContent) {
@@ -1369,11 +1432,13 @@ public class ContentPreview {
       case TdApi.PushMessageContentPollOptionAdded.CONSTRUCTOR:
       case TdApi.PushMessageContentChecklist.CONSTRUCTOR:
       case TdApi.PushMessageContentChecklistTasksAdded.CONSTRUCTOR:
-      case TdApi.PushMessageContentChecklistTasksDone.CONSTRUCTOR: {
+      case TdApi.PushMessageContentChecklistTasksDone.CONSTRUCTOR:
+      case TdApi.PushMessageContentTonConnectRequest.CONSTRUCTOR:
+      case TdApi.PushMessageContentTonWalletTransfer.CONSTRUCTOR: {
         return getNotificationPreview(TdApi.MessageUnsupported.CONSTRUCTOR, tdlib, chatId, push.senderId, push.senderName, null);
       }
       default:
-        Td.assertPushMessageContent_fd03564b();
+        Td.assertPushMessageContent_497d2f0c();
         throw Td.unsupported(push.content);
     }
   }
@@ -1762,6 +1827,8 @@ public class ContentPreview {
       case TdApi.MessagePollOptionDeleted.CONSTRUCTOR:
       case TdApi.MessageChatAddedToCommunity.CONSTRUCTOR:
       case TdApi.MessageChatRemovedFromCommunity.CONSTRUCTOR:
+      case TdApi.MessageTonConnectRequest.CONSTRUCTOR:
+      case TdApi.MessageTonWalletTransfer.CONSTRUCTOR:
         // TODO support these previews
         return new ContentPreview(EMOJI_QUIZ, R.string.UnsupportedMessage);
         
@@ -1772,7 +1839,7 @@ public class ContentPreview {
       case TdApi.MessagePassportDataReceived.CONSTRUCTOR:
       case TdApi.MessageWebAppDataReceived.CONSTRUCTOR:
       default:
-        Td.assertMessageContent_af730a78();
+        Td.assertMessageContent_f7758f8b();
         throw new UnsupportedOperationException(Integer.toString(type));
     }
   }

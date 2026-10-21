@@ -114,7 +114,7 @@ class CommandLineTest(unittest.TestCase):
         VERIFY.main(["release.apk", "--build-tools", "sdk/build-tools/37.0.0",
                      "--expected-certificate", "ABC", "--project-root", str(root)])
         tdlib.assert_called_once_with(root, Path("release.apk"))
-        profiles.assert_called_once_with(root, Path("release.apk"), "publicLatestArm64Release")
+        profiles.assert_called_once_with(root, Path("release.apk"), "publicLatestRelease")
         local.assert_not_called()
 
   def test_explicit_signing_arguments_are_still_required_without_local_flag(self):

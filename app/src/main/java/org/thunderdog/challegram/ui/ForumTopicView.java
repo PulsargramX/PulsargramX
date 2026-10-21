@@ -343,17 +343,11 @@ public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watche
       this.tdlib.emoji().forgetWatcher(this.customEmojiId, this);
     }
     
-    // Text can change on every bind; the icon animation keeps its receiver and
-    // playback state until its identity or requested size actually changes.
-    textMediaReceiver.clear();
-    
     // Clear text layouts immediately to prevent drawing stale content
     // This is critical for preventing topic identity mix-ups during recycling
     displayTitle = null;
     displaySender = null;
     displayPreview = null;
-    currentPreview = null;
-    previewIconIds = null;
     
     // Check if this is a different topic or if last message changed
     long lastMessageId = topic.lastMessage != null ? topic.lastMessage.id : 0;
@@ -361,12 +355,17 @@ public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watche
     
     // Clear message filtering state only if topic or last message changed
     if (topicChanged || lastMessageChanged) {
+      currentPreview = null;
+      previewIconIds = null;
       visibleMessage = null;
       cachedVisibleLastMessage = null;
       cachedForHiddenMessageId = 0;
       isLookingUpVisibleMessage = false;
       isPreviewHighlighted = false;
       bindGeneration++;
+    }
+    if (topicChanged) {
+      textMediaReceiver.clear();
     }
     
     // Update topic identity FIRST before any async operations
@@ -398,6 +397,8 @@ public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watche
 
     if (hasDraft) {
       // Show draft preview
+      currentPreview = null;
+      previewIconIds = null;
       this.showingDraft = true;
       TdApi.DraftMessageContentText draftText = (TdApi.DraftMessageContentText) topic.draftMessage.content;
       this.senderText = Lang.getString(R.string.Draft);
@@ -449,6 +450,8 @@ public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watche
           }
           // Don't process the hidden message - show empty preview
           // This creates a brief blank state until the lookup completes
+          currentPreview = null;
+          previewIconIds = null;
           this.senderText = "";
           this.previewFormattedText = null;
           this.timeText = Lang.timeOrDateShort(topic.lastMessage.date, java.util.concurrent.TimeUnit.SECONDS);
@@ -467,6 +470,8 @@ public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watche
         setMessagePreview(msg);
       }
     } else {
+      currentPreview = null;
+      previewIconIds = null;
       this.showingDraft = false;
       this.senderText = "";
       this.previewFormattedText = null;
@@ -519,16 +524,24 @@ public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watche
   }
 
   private void setMessagePreview (TdApi.Message message) {
-    visibleMessage = message;
+    // Topic snapshots copy the Message wrapper, but retain its content until an
+    // update replaces it. Keep resolved albums and pending refreshes on rebind.
+    boolean reusePreview = currentPreview != null && visibleMessage != null &&
+      visibleMessage.chatId == message.chatId && visibleMessage.id == message.id &&
+      visibleMessage.mediaAlbumId == message.mediaAlbumId &&
+      visibleMessage.editDate == message.editDate && visibleMessage.content == message.content;
+    visibleMessage = Td.copyOf(message);
     timeText = Lang.timeOrDateShort(message.date, java.util.concurrent.TimeUnit.SECONDS);
     isOutgoing = message.isOutgoing;
     isSending = tdlib.messageSending(message);
     long relevantReadId = isOutgoing ? topic.lastReadOutboxMessageId : topic.lastReadInboxMessageId;
     isMessageUnread = message.id > relevantReadId;
-    setContentPreview(ContentPreview.getChatListPreview(tdlib, topic.info.chatId, message, true));
+    setContentPreview(reusePreview ? currentPreview :
+      ContentPreview.getChatListPreview(tdlib, topic.info.chatId, message, true));
   }
 
   private void setContentPreview (ContentPreview preview) {
+    boolean previewChanged = currentPreview != preview;
     currentPreview = preview;
     previewFormattedText = preview.buildFormattedText(true);
     senderText = !preview.hideAuthor ?
@@ -536,7 +549,7 @@ public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watche
     previewIconIds = ChatListPreview.getIconIds(preview, visibleMessage, !preview.hideAuthor);
     previewIconColorId = ChatListPreview.getIconColorId(visibleMessage, !preview.hideAuthor);
     isPreviewHighlighted = preview.isHighlighted;
-    if (preview.hasRefresher()) {
+    if (previewChanged && preview.hasRefresher()) {
       preview.refreshContent(this);
     }
   }
@@ -1228,7 +1241,6 @@ public class ForumTopicView extends BaseView implements TdlibEmojiManager.Watche
 
   private void requestTextMedia () {
     if (displayPreview != null && displayPreview.hasMedia()) {
-      textMediaReceiver.clear();
       displayPreview.requestMedia(textMediaReceiver);
     } else {
       textMediaReceiver.clear();

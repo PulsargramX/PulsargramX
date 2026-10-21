@@ -3,11 +3,11 @@ set -euo pipefail
 
 case "${1:-}" in
   native)
-    task=:app:externalNativeBuildPublicLatestArm64Release
+    task=:app:externalNativeBuildPublicLatestRelease
     heap=2g
     ;;
   apk)
-    task=:app:assemblePublicLatestArm64Release
+    task=:app:assemblePublicLatestRelease
     heap=4g
     ;;
   *)
@@ -77,4 +77,4 @@ echo "Building $task with a $heap heap and two native jobs"
 # native linker from sharing memory with application compilation and R8.
 ./gradlew "$task" --no-daemon --no-parallel --max-workers=1 --console=plain --stacktrace \
   "-Dorg.gradle.jvmargs=-Xmx$heap -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8" \
-  -Pkotlin.compiler.execution.strategy=in-process -Ptgx.nativeJobs=2 -Pclient.edition=public
+  -Pkotlin.compiler.execution.strategy=in-process -Ptgx.nativeJobs=2 -Pclient.edition=public -Pabi=arm64

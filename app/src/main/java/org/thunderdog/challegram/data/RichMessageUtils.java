@@ -75,13 +75,22 @@ public final class RichMessageUtils {
   }
 
   public static String toPlainText (@Nullable TdApi.RichMessage message) {
+    return toPlainText(message, false);
+  }
+
+  private static String toPlainText (@Nullable TdApi.RichMessage message, boolean forPreview) {
     if (message == null) {
       return "";
     }
     StringBuilder out = new StringBuilder();
-    appendBlocksPlain(out, message.blocks, "", 0);
+    appendBlocksPlain(out, message.blocks, "", 0, forPreview);
     trimTrailingWhitespace(out);
-    return out.toString();
+    return forPreview ? out.toString().trim() : out.toString();
+  }
+
+  public static TdApi.FormattedText toPreviewText (@Nullable TdApi.RichMessage message) {
+    // Media is represented by the preview icon and localized fallback, not copy/export labels.
+    return new TdApi.FormattedText(toPlainText(message, true), new TdApi.TextEntity[0]);
   }
 
   public static TdApi.FormattedText toSearchableText (@Nullable TdApi.RichMessage message) {
@@ -188,7 +197,7 @@ public final class RichMessageUtils {
   }
 
   private static void appendBlocksPlain (StringBuilder out, @Nullable TdApi.PageBlock[] blocks,
-                                         String parentPath, int quoteDepth) {
+                                         String parentPath, int quoteDepth, boolean forPreview) {
     if (blocks == null) {
       return;
     }
@@ -235,7 +244,9 @@ public final class RichMessageUtils {
             appendRichTextPlain(out, ((TdApi.PageBlockThinking) block).text);
             break;
           case TdApi.PageBlockDivider.CONSTRUCTOR:
-            out.append("—");
+            if (!forPreview) {
+              out.append("—");
+            }
             break;
           case TdApi.PageBlockMathematicalExpression.CONSTRUCTOR:
             out.append(nullToEmpty(((TdApi.PageBlockMathematicalExpression) block).expression));
@@ -243,14 +254,19 @@ public final class RichMessageUtils {
           case TdApi.PageBlockAnchor.CONSTRUCTOR:
             break;
           case TdApi.PageBlockList.CONSTRUCTOR:
-            appendListPlain(out, (TdApi.PageBlockList) block, path, quoteDepth);
+            appendListPlain(out, (TdApi.PageBlockList) block, path, quoteDepth, forPreview);
             break;
           case TdApi.PageBlockBlockQuote.CONSTRUCTOR: {
             TdApi.PageBlockBlockQuote quote = (TdApi.PageBlockBlockQuote) block;
             StringBuilder quoted = new StringBuilder();
-            appendBlocksPlain(quoted, quote.blocks, path, quoteDepth + 1);
-            appendQuoted(out, quoted, quoteDepth + 1);
-            if (quote.credit != null) {
+            appendBlocksPlain(quoted, quote.blocks, path, quoteDepth + 1, forPreview);
+            if (forPreview) {
+              out.append(quoted);
+            } else {
+              appendQuoted(out, quoted, quoteDepth + 1);
+            }
+            if (quote.credit != null &&
+                (!forPreview || !richTextToPlain(quote.credit).trim().isEmpty())) {
               out.append("\n— ");
               appendRichTextPlain(out, quote.credit);
             }
@@ -259,7 +275,8 @@ public final class RichMessageUtils {
           case TdApi.PageBlockPullQuote.CONSTRUCTOR: {
             TdApi.PageBlockPullQuote quote = (TdApi.PageBlockPullQuote) block;
             appendRichTextPlain(out, quote.text);
-            if (quote.credit != null) {
+            if (quote.credit != null &&
+                (!forPreview || !richTextToPlain(quote.credit).trim().isEmpty())) {
               out.append("\n— ");
               appendRichTextPlain(out, quote.credit);
             }
@@ -267,41 +284,46 @@ public final class RichMessageUtils {
           }
           case TdApi.PageBlockAnimation.CONSTRUCTOR: {
             TdApi.PageBlockAnimation media = (TdApi.PageBlockAnimation) block;
-            appendMediaPlain(out, "Animation", media.caption);
+            appendMediaPlain(out, "Animation", media.caption, forPreview);
             break;
           }
           case TdApi.PageBlockAudio.CONSTRUCTOR: {
             TdApi.PageBlockAudio media = (TdApi.PageBlockAudio) block;
-            appendMediaPlain(out, media.audio != null && media.audio.title != null &&
-              !media.audio.title.isEmpty() ? media.audio.title : "Audio", media.caption);
+            String title = media.audio != null ? media.audio.title : null;
+            if (forPreview && title != null) {
+              out.append(title);
+            }
+            appendMediaPlain(out, title != null && !title.isEmpty() ? title : "Audio",
+              media.caption, forPreview);
             break;
           }
           case TdApi.PageBlockPhoto.CONSTRUCTOR:
-            appendMediaPlain(out, "Photo", ((TdApi.PageBlockPhoto) block).caption);
+            appendMediaPlain(out, "Photo", ((TdApi.PageBlockPhoto) block).caption, forPreview);
             break;
           case TdApi.PageBlockVideo.CONSTRUCTOR:
-            appendMediaPlain(out, "Video", ((TdApi.PageBlockVideo) block).caption);
+            appendMediaPlain(out, "Video", ((TdApi.PageBlockVideo) block).caption, forPreview);
             break;
           case TdApi.PageBlockVoiceNote.CONSTRUCTOR:
-            appendMediaPlain(out, "Voice message", ((TdApi.PageBlockVoiceNote) block).caption);
+            appendMediaPlain(out, "Voice message", ((TdApi.PageBlockVoiceNote) block).caption,
+              forPreview);
             break;
           case TdApi.PageBlockMap.CONSTRUCTOR:
-            appendMediaPlain(out, "Map", ((TdApi.PageBlockMap) block).caption);
+            appendMediaPlain(out, "Map", ((TdApi.PageBlockMap) block).caption, forPreview);
             break;
           case TdApi.PageBlockCover.CONSTRUCTOR:
             appendBlocksPlain(out, new TdApi.PageBlock[] {
               ((TdApi.PageBlockCover) block).cover
-            }, path, quoteDepth);
+            }, path, quoteDepth, forPreview);
             break;
           case TdApi.PageBlockCollage.CONSTRUCTOR: {
             TdApi.PageBlockCollage collage = (TdApi.PageBlockCollage) block;
-            appendBlocksPlain(out, collage.blocks, path, quoteDepth);
+            appendBlocksPlain(out, collage.blocks, path, quoteDepth, forPreview);
             appendCaptionPlain(out, collage.caption);
             break;
           }
           case TdApi.PageBlockSlideshow.CONSTRUCTOR: {
             TdApi.PageBlockSlideshow slideshow = (TdApi.PageBlockSlideshow) block;
-            appendBlocksPlain(out, slideshow.blocks, path, quoteDepth);
+            appendBlocksPlain(out, slideshow.blocks, path, quoteDepth, forPreview);
             appendCaptionPlain(out, slideshow.caption);
             break;
           }
@@ -312,15 +334,15 @@ public final class RichMessageUtils {
             TdApi.PageBlockDetails details = (TdApi.PageBlockDetails) block;
             appendRichTextPlain(out, details.header);
             out.append(details.isOpen ? "\n" : "\n");
-            appendBlocksPlain(out, details.blocks, path, quoteDepth);
+            appendBlocksPlain(out, details.blocks, path, quoteDepth, forPreview);
             break;
           }
           default:
-            appendUnknownPlain(out, block);
+            appendUnknownPlain(out, block, forPreview);
             break;
         }
       } catch (Throwable ignored) {
-        appendUnknownPlain(out, block);
+        appendUnknownPlain(out, block, forPreview);
       }
       if (out.length() > before) {
         appendBlockSeparator(out);
@@ -329,13 +351,17 @@ public final class RichMessageUtils {
   }
 
   private static void appendListPlain (StringBuilder out, TdApi.PageBlockList list,
-                                       String path, int quoteDepth) {
+                                       String path, int quoteDepth, boolean forPreview) {
     if (list.items == null) {
       return;
     }
     for (int index = 0; index < list.items.length; index++) {
       TdApi.PageBlockListItem item = list.items[index];
       if (item == null) {
+        continue;
+      }
+      if (forPreview) {
+        appendBlocksPlain(out, item.blocks, childPath(path, index), quoteDepth, true);
         continue;
       }
       if (index > 0 && !endsWithNewline(out)) {
@@ -352,7 +378,7 @@ public final class RichMessageUtils {
         out.append("• ");
       }
       StringBuilder child = new StringBuilder();
-      appendBlocksPlain(child, item.blocks, childPath(path, index), quoteDepth);
+      appendBlocksPlain(child, item.blocks, childPath(path, index), quoteDepth, false);
       trimTrailingWhitespace(child);
       String childText = child.toString().replace("\n", "\n  ");
       out.append(childText);
@@ -387,8 +413,11 @@ public final class RichMessageUtils {
   }
 
   private static void appendMediaPlain (StringBuilder out, String label,
-                                        @Nullable TdApi.PageBlockCaption caption) {
-    out.append('[').append(label).append(']');
+                                        @Nullable TdApi.PageBlockCaption caption,
+                                        boolean forPreview) {
+    if (!forPreview) {
+      out.append('[').append(label).append(']');
+    }
     appendCaptionPlain(out, caption);
   }
 
@@ -1176,6 +1205,11 @@ public final class RichMessageUtils {
   }
 
   private static void appendUnknownPlain (StringBuilder out, TdApi.Object object) {
+    appendUnknownPlain(out, object, false);
+  }
+
+  private static void appendUnknownPlain (StringBuilder out, TdApi.Object object,
+                                          boolean forPreview) {
     int before = out.length();
     try {
       for (Field field : object.getClass().getFields()) {
@@ -1183,7 +1217,8 @@ public final class RichMessageUtils {
         if (value instanceof TdApi.RichText) {
           appendRichTextPlain(out, (TdApi.RichText) value);
         } else if (value instanceof TdApi.PageBlock) {
-          appendBlocksPlain(out, new TdApi.PageBlock[] { (TdApi.PageBlock) value }, "", 0);
+          appendBlocksPlain(out, new TdApi.PageBlock[] { (TdApi.PageBlock) value }, "", 0,
+            forPreview);
         } else if (value != null && value.getClass().isArray()) {
           int length = Array.getLength(value);
           for (int index = 0; index < length; index++) {
@@ -1191,13 +1226,14 @@ public final class RichMessageUtils {
             if (item instanceof TdApi.RichText) {
               appendRichTextPlain(out, (TdApi.RichText) item);
             } else if (item instanceof TdApi.PageBlock) {
-              appendBlocksPlain(out, new TdApi.PageBlock[] { (TdApi.PageBlock) item }, "", 0);
+              appendBlocksPlain(out, new TdApi.PageBlock[] { (TdApi.PageBlock) item }, "", 0,
+                forPreview);
             }
           }
         }
       }
     } catch (Throwable ignored) { }
-    if (out.length() == before && object instanceof TdApi.PageBlock) {
+    if (!forPreview && out.length() == before && object instanceof TdApi.PageBlock) {
       out.append("[Unsupported content]");
     }
   }

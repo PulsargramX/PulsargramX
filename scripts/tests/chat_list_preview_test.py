@@ -53,10 +53,13 @@ class ChatListPreviewBehaviorTest(unittest.TestCase):
         album_refresh = content[start:content.index("    TdApi.FormattedText argument;", start)]
         topic = read(TOPIC)
         topic_methods = "\n".join(java_method(topic, signature) for signature in (
+            "public void setTopic (Tdlib tdlib, TdApi.ForumTopic topic, @Nullable String highlightQuery)",
+            "private void setMessagePreview (",
             "private void setContentPreview (",
             "public void onContentPreviewChanged (",
+            "private void requestTextMedia ()",
         ))
-        resource_source = presentation + content_methods
+        resource_source = presentation + content_methods + topic_methods
         resources = "\n".join(
             "static class " + kind + " {static final int " + ", ".join(
                 f"{name} = {index}" for index, name in enumerate(sorted(set(re.findall(
@@ -72,7 +75,28 @@ public class ChatListPreviewTest {
   @interface NonNull {}
   @interface PorterDuffColorId {}
   static class R { RESOURCES }
-  static class Settings {static final int CHAT_MODE_2LINE = 0, CHAT_MODE_3LINE = 1, CHAT_MODE_3LINE_BIG = 2;}
+  static class Settings {
+    static final int CHAT_MODE_2LINE = 0, CHAT_MODE_3LINE = 1, CHAT_MODE_3LINE_BIG = 2;
+    static final Settings INSTANCE = new Settings();
+    int mode;
+    static Settings instance() {return INSTANCE;}
+    int getChatListMode() {return mode;}
+  }
+  static class Gravity {static final int CENTER = 0;}
+  static class Counter {
+    static class Builder {
+      Builder callback(Object row) {return this;}
+      Builder drawable(int icon, float size, float margin, int gravity) {return this;}
+      Counter build() {return new Counter();}
+    }
+    void setCount(int count, boolean muted, boolean animated) {}
+  }
+  static class TdlibStatusManager {
+    static class Helper {
+      Helper(Object context, Tdlib tdlib, Object target, Object unused) {}
+      void attachToChat(long chatId, TdApi.MessageTopic topic) {}
+    }
+  }
   static class ColorId {static final int NONE = 0, chatListIcon = 1;}
   static class Screen {static int dp(float value) {return Math.round(value);}}
   static class StringUtils {static boolean isEmpty(String text) {return text == null || text.isEmpty();}}
@@ -82,6 +106,7 @@ public class ChatListPreviewTest {
   static class Lang {
     static String getString(int id) {return "label:" + id;}
     static String plural(int id, int count) {return count + " label:" + id;}
+    static String timeOrDateShort(int date, java.util.concurrent.TimeUnit unit) {return "time:" + date;}
   }
   static class TD {
     static final int COMBINE_MODE_NONE = 0;
@@ -92,6 +117,13 @@ public class ChatListPreviewTest {
     }
   }
   static class Td {
+    static TdApi.Message copyOf(TdApi.Message message) {
+      TdApi.Message copy = new TdApi.Message();
+      copy.id = message.id; copy.chatId = message.chatId; copy.mediaAlbumId = message.mediaAlbumId;
+      copy.content = message.content; copy.editDate = message.editDate; copy.date = message.date;
+      copy.isOutgoing = message.isOutgoing; copy.senderId = message.senderId; copy.sendingState = message.sendingState;
+      return copy;
+    }
     static boolean isCall(TdApi.MessageContent content) {return content instanceof TdApi.MessageCall;}
     static boolean isProximityAlertTriggered(TdApi.MessageContent content) {return content instanceof TdApi.MessageProximityAlertTriggered;}
     static long getSenderId(TdApi.Message message) {
@@ -131,6 +163,12 @@ public class ChatListPreviewTest {
     static void increment(SparseIntArray array, int key) {array.counts.merge(key, 1, Integer::sum);}
   }
   static class Tdlib {
+    static final int CHAT_MARKED_AS_UNREAD = -1;
+    int id() {return 1;}
+    static class EmojiManager {void forgetWatcher(long id, Object watcher) {}}
+    EmojiManager emoji() {return new EmojiManager();}
+    boolean forumTopicNeedsMuteIcon(long chatId, TdApi.ForumTopic topic) {return false;}
+    boolean messageSending(TdApi.Message message) {return message.sendingState != null;}
     static class Album {
       List<TdApi.Message> messages;
       boolean more;
@@ -138,8 +176,10 @@ public class ChatListPreviewTest {
       boolean mayHaveMoreItems() {return more;}
     }
     Album local, remote;
+    int albumRequests;
     ArrayDeque<Runnable> callbacks = new ArrayDeque<>();
     void getAlbum(TdApi.Message message, boolean onlyLocal, Album previous, Consumer<Album> callback) {
+      albumRequests++;
       if (onlyLocal) callback.accept(local);
       else callbacks.add(() -> callback.accept(remote));
     }
@@ -159,7 +199,10 @@ public class ChatListPreviewTest {
     static void drawRtl(Canvas canvas, Drawable drawable, int x, int y, int paint, int width, boolean rtl) {xs.add(x);}
   }
   static class DrawableProvider {Drawable getSparseDrawable(int id, int color) {return new Drawable(id);}}
-  static class ComplexReceiver {}
+  static class ComplexReceiver {
+    int clears;
+    void clear() {clears++;}
+  }
   static class ViewProvider {}
   static class TextEntity {}
   static class TextColorSets {static class Regular {static final int NEGATIVE = 1, NORMAL = 2, LIGHT = 3;}}
@@ -191,6 +234,8 @@ public class ChatListPreviewTest {
     int getNextLineHeight() {return 18;}
     int getLineHeight(boolean unused) {return 18;}
     int getLineCount() {return lines;}
+    boolean hasMedia() {return entities != null && entities.length > 0;}
+    void requestMedia(ComplexReceiver receiver) {}
     void draw(Canvas canvas, int x, int y, Object colors, float alpha) {this.x = x; this.y = y;}
     void draw(Canvas canvas, int x, int y, Object colors, float alpha, ComplexReceiver receiver) {draw(canvas, x, y, colors, alpha);}
   }
@@ -219,6 +264,10 @@ public class ChatListPreviewTest {
       default void onContentPreviewNotChanged(long chatId, long messageId, ContentPreview oldPreview) {}
     }
     static ContentPreview applyMessageFilterToPreview(ContentPreview preview) {return preview;}
+    static boolean isMessageHiddenByFilter(TdApi.Message message) {return false;}
+    static ContentPreview getChatListPreview(Tdlib tdlib, long chatId, TdApi.Message message, boolean restricted) {
+      return forMessage(tdlib, message);
+    }
     CONTENT_METHODS
     static ContentPreview forMessage(Tdlib tdlib, TdApi.Message message) {
       boolean allowContent = true;
@@ -237,11 +286,25 @@ public class ChatListPreviewTest {
     TdApi.Message visibleMessage;
     ContentPreview currentPreview;
     TdApi.FormattedText previewFormattedText;
-    String senderText;
+    String senderText, titleText, timeText, highlightQuery;
+    Text displayTitle, displaySender, displayPreview;
+    ComplexReceiver textMediaReceiver = new ComplexReceiver();
+    Counter unreadCounter, reactionsCounter;
+    TdlibStatusManager.Helper statusHelper;
+    long currentTopicId, currentChatId, currentLastMessageId, bindGeneration, customEmojiId, cachedForHiddenMessageId;
+    TdApi.Message cachedVisibleLastMessage;
+    Object customEmoji;
     IntList previewIconIds;
     int previewIconColorId, listMode, lastMeasuredWidth = 320, layouts, invalidations;
-    boolean showingDraft, isPreviewHighlighted;
+    boolean showingDraft, isPreviewHighlighted, isLookingUpVisibleMessage, isAttached, isMuted;
+    boolean isOutgoing, isSending, isMessageUnread;
     TopicRow(Tdlib tdlib, TdApi.Message message) {this.tdlib = tdlib; visibleMessage = message;}
+    Object context() {return null;}
+    static int getIconSize(int mode) {return 52;}
+    void loadTopicIcon() {}
+    void findVisibleMessage(TdApi.Message message) {isLookingUpVisibleMessage = true;}
+    static TdApi.Message getCachedVisibleMessage(int account, long chat, long topic, long hidden) {return null;}
+    static void removeCachedVisibleMessage(int account, long chat, long topic, long hidden) {}
     void buildTextLayouts() {layouts++;}
     void invalidate() {invalidations++;}
     TOPIC_METHODS
@@ -304,6 +367,65 @@ public class ChatListPreviewTest {
     tdlib.flush();
     check(row.previewFormattedText == caption && row.previewIconIds.get(0) == 70, "Remote album caption replaces last item placeholder");
     check(row.layouts == 1 && row.invalidations == 1, "Accepted caption refresh rebuilds and redraws");
+
+    TdApi.ForumTopic topic = new TdApi.ForumTopic();
+    topic.info = new TdApi.ForumTopicInfo(); topic.info.chatId = -10; topic.info.forumTopicId = 42;
+    topic.info.name = "Topic"; topic.lastMessage = last;
+    TopicRow rebound = new TopicRow(tdlib, null);
+    rebound.setTopic(tdlib, topic, null);
+    ContentPreview pending = rebound.currentPreview;
+    int requests = tdlib.albumRequests;
+    for (int i = 0; i < 10; i++) {
+      topic.lastMessage = Td.copyOf(last); topic.unreadCount++;
+      rebound.setTopic(tdlib, topic, null);
+      check(rebound.currentPreview == pending && tdlib.albumRequests == requests,
+        "Unrelated topic updates must keep the pending album lookup");
+    }
+    tdlib.flush();
+    ContentPreview resolved = rebound.currentPreview;
+    requests = tdlib.albumRequests;
+    for (int i = 0; i < 10; i++) {
+      topic.info.name = "Renamed " + i; topic.lastReadInboxMessageId = last.id;
+      Settings.instance().mode = i % 3;
+      rebound.setTopic(tdlib, topic, null);
+      check(rebound.currentPreview == resolved && rebound.previewFormattedText == caption,
+        "Rebinding an album must never replace its caption with a single-item placeholder");
+      check(tdlib.albumRequests == requests && !rebound.isMessageUnread,
+        "Read state and list layout update without restarting album loading");
+    }
+    rebound.displayPreview = text;
+    rebound.displayPreview.entities = entities;
+    int clears = rebound.textMediaReceiver.clears;
+    rebound.requestTextMedia(); rebound.requestTextMedia();
+    check(rebound.textMediaReceiver.clears == clears, "Preview relayout must keep active emoji receivers");
+    rebound.displayPreview = null; rebound.requestTextMedia();
+    check(rebound.textMediaReceiver.clears == clears + 1, "Removing preview media releases old receivers");
+
+    TdApi.Message edited = Td.copyOf(last);
+    edited.content = photo(last.id, new TdApi.FormattedText("Edited", null)).content;
+    topic.lastMessage = edited; rebound.setTopic(tdlib, topic, null);
+    check(rebound.currentPreview != resolved && rebound.previewFormattedText.text.equals("Edited"),
+      "A content update with the same message ID must replace the preview");
+    ContentPreview beforeEdit = rebound.currentPreview;
+    edited.content = photo(last.id, new TdApi.FormattedText("Edited again", null)).content;
+    rebound.setTopic(tdlib, topic, null);
+    check(rebound.currentPreview != beforeEdit && rebound.previewFormattedText.text.equals("Edited again"),
+      "Replacing content on a mutable message must invalidate its saved preview");
+    topic.draftMessage = new TdApi.DraftMessage();
+    topic.draftMessage.content = new TdApi.DraftMessageContentText();
+    ((TdApi.DraftMessageContentText) topic.draftMessage.content).text = new TdApi.FormattedText("Draft", null);
+    rebound.setTopic(tdlib, topic, null); tdlib.flush();
+    check(rebound.showingDraft && rebound.currentPreview == null && rebound.previewFormattedText.text.equals("Draft"),
+      "A draft replaces an album and rejects its pending caption refresh");
+    topic.draftMessage = null; rebound.setTopic(tdlib, topic, null);
+    check(rebound.currentPreview != null && !rebound.showingDraft, "Clearing a draft restores message previews");
+    TdApi.ForumTopic otherTopic = new TdApi.ForumTopic();
+    otherTopic.info = new TdApi.ForumTopicInfo(); otherTopic.info.chatId = -20; otherTopic.info.forumTopicId = 42;
+    otherTopic.info.name = "Other chat";
+    rebound.setTopic(tdlib, otherTopic, null); tdlib.flush();
+    check(rebound.currentPreview == null && rebound.previewFormattedText == null,
+      "Recycling into another chat clears the old album and rejects its callback");
+    Settings.instance().mode = 0;
     TdApi.Message[] eightPhotos = new TdApi.Message[8];
     for (int i = 0; i < eightPhotos.length; i++) {
       eightPhotos[i] = photo(107 - i, i == 7 ? caption : null);

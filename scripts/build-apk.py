@@ -254,10 +254,10 @@ def worker(project, cache, edition):
   os.environ["TGX_GRADLE_PROJECT_DIR"] = str(project)
   common = ["--no-parallel", "--max-workers=1", "--stacktrace",
             "-Pkotlin.compiler.execution.strategy=in-process", "-Ptgx.nativeJobs=2",
-            "-Pclient.edition=" + edition]
+            "-Pclient.edition=" + edition, "-Pabi=arm64"]
   logs = cache / "logs"
   logs.mkdir(exist_ok=True)
-  variant = edition + "LatestArm64Release"
+  variant = edition + "LatestRelease"
   task_variant = variant[0].upper() + variant[1:]
   for stage, task, heap in (("native", ":app:externalNativeBuild" + task_variant, "2g"),
                             ("APK", ":app:assemble" + task_variant, "4g")):
@@ -272,7 +272,7 @@ def worker(project, cache, edition):
         print(f"Native log: {log}")
         print("\n".join(log.read_text(errors="replace").splitlines()[-15:]))
       raise BuildError(f"{stage} build failed (exit {status}); log: {os.environ['TGX_GRADLE_LOG_FILE']}")
-  apks = list((project / "app/build/outputs/apk" / (edition + "LatestArm64") / "release").glob("*.apk"))
+  apks = list((project / "app/build/outputs/apk" / (edition + "Latest") / "release").glob("*.apk"))
   if len(apks) != 1:
     raise BuildError("Expected exactly one arm64 release APK.")
   subprocess.run([sys.executable, str(SOURCE / "scripts/verify-release.py"), str(apks[0]),
@@ -397,7 +397,7 @@ def main():
       temporary = destination.with_suffix(".apk.tmp")
       shutil.copyfile(apk, temporary)
       os.replace(temporary, destination)
-      mapping = project / "app/build/outputs/mapping" / (args.edition + "LatestArm64Release") / "mapping.txt"
+      mapping = project / "app/build/outputs/mapping" / (args.edition + "LatestRelease") / "mapping.txt"
       if mapping.exists():
         shutil.copyfile(mapping, destination.with_suffix(".mapping.txt"))
       digest = hashlib.sha256(destination.read_bytes()).hexdigest()

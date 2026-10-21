@@ -1,6 +1,6 @@
 --- a/td/telegram/WebAppManager.cpp
 +++ b/td/telegram/WebAppManager.cpp
-@@ -290,16 +290,18 @@
+@@ -272,16 +272,18 @@
  
  class ProlongWebViewQuery final : public Td::ResultHandler {
    DialogId dialog_id_;
@@ -19,8 +19,8 @@
 +      return on_error(Status::Error(400, "WEB_APP_CHAT_UNAVAILABLE"));
      }
  
-     int32 flags = 0;
-@@ -329,12 +331,17 @@
+     auto reply_to = input_reply_to.get_input_reply_to(td_, message_topic);
+@@ -302,12 +304,17 @@
  
      bool ptr = result_ptr.ok();
      if (!ptr) {
@@ -39,7 +39,7 @@
    }
  };
  
-@@ -602,6 +609,18 @@
+@@ -575,6 +582,18 @@
    opened_web_views_.emplace(query_id, std::move(opened_web_view));
  }
  
@@ -71,7 +71,7 @@
  
 --- a/td/generate/scheme/td_api.tl
 +++ b/td/generate/scheme/td_api.tl
-@@ -10996,6 +10996,9 @@
+@@ -11362,6 +11362,9 @@
  //@description A message was sent by an opened Web App, so the Web App needs to be closed @web_app_launch_id Identifier of Web App launch
  updateWebAppMessageSent web_app_launch_id:int64 = Update;
  

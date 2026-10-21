@@ -144,7 +144,7 @@ def verify_tdlib(root, apk):
   print(f"Verified packaged TDLib revision: {expected}")
 
 
-def verify_profiles(root, apk, variant="publicLatestArm64Release"):
+def verify_profiles(root, apk, variant="publicLatestRelease"):
   intermediates = root / "app/build/intermediates"
   saved = root / "app/src/main/generated/baselineProfiles"
   for kind, name in [("art", "baseline-prof.txt"), ("startup", "startup-prof.txt")]:
@@ -217,7 +217,7 @@ def main(argv=None):
     print(f"Update identity verified: {old_version} -> {version}")
 
   verify_tdlib(root, args.apk)
-  verify_profiles(root, args.apk, args.variant or args.edition + "LatestArm64Release")
+  verify_profiles(root, args.apk, args.variant or args.edition + "LatestRelease")
   if args.edition == "public":
     audit_command = [sys.executable, str(root / "scripts/verify-public.py"),
                      "--apk", str(args.apk), "--build-tools", str(args.build_tools)]

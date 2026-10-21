@@ -7,11 +7,11 @@
 -  Status check_shared_dialog(Td *td, DialogId dialog_id) const;
 +  Status check_shared_dialog(Td *td, DialogId dialog_id, UserId requesting_bot_user_id) const;
  
-   Status check_shared_dialog_count(size_t count) const;
+   Status check_shared_user(bool is_bot, bool is_premium) const;
  
 --- a/td/telegram/RequestedDialogType.cpp
 +++ b/td/telegram/RequestedDialogType.cpp
-@@ -227,9 +227,16 @@
+@@ -215,12 +215,17 @@
    return button_id_;
  }
  
@@ -19,16 +19,17 @@
 +Status RequestedDialogType::check_shared_dialog(Td *td, DialogId dialog_id, UserId requesting_bot_user_id) const {
    switch (dialog_id.get_type()) {
      case DialogType::User: {
-+      if (type_ == Type::CreateBot) {
-+        if (!requesting_bot_user_id.is_valid() ||
-+            !td->user_manager_->is_user_managed_bot(dialog_id.get_user_id(), requesting_bot_user_id)) {
-+          return Status::Error(400, "The bot isn't owned by the user or managed by the requesting bot");
-+        }
-+        break;
+       auto user_id = dialog_id.get_user_id();
+       TRY_STATUS(
+           check_shared_user(td->user_manager_->is_user_bot(user_id), td->user_manager_->is_user_premium(user_id)));
++      if (type_ == Type::CreateBot &&
++          (!requesting_bot_user_id.is_valid() ||
++           !td->user_manager_->is_user_managed_bot(user_id, requesting_bot_user_id))) {
++        return Status::Error(400, "The bot isn't owned by the user or managed by the requesting bot");
 +      }
-       if (type_ != Type::User) {
-         return Status::Error(400, "Wrong chat type");
-       }
+       break;
+     }
+     case DialogType::Chat: {
 --- a/td/telegram/UserManager.h
 +++ b/td/telegram/UserManager.h
 @@ -256,6 +256,8 @@
@@ -42,7 +43,7 @@
    struct BotData {
 --- a/td/telegram/UserManager.cpp
 +++ b/td/telegram/UserManager.cpp
-@@ -5413,6 +5413,13 @@
+@@ -5460,6 +5460,13 @@
    return is_user_bot(get_user(user_id));
  }
  
@@ -58,7 +59,7 @@
  }
 --- a/td/telegram/MessageQueryManager.cpp
 +++ b/td/telegram/MessageQueryManager.cpp
-@@ -3240,6 +3240,17 @@
+@@ -3208,6 +3208,17 @@
    }
    TRY_STATUS_PROMISE(promise, requested_dialog_type->check_shared_dialog_count(shared_dialog_ids.size()));
  
@@ -76,7 +77,7 @@
    for (auto shared_dialog_id : shared_dialog_ids) {
      if (shared_dialog_id.get_type() != DialogType::User) {
        if (!td_->dialog_manager_->have_dialog_force(shared_dialog_id, "share_dialogs_with_bot")) {
-@@ -3253,7 +3264,7 @@
+@@ -3221,7 +3232,7 @@
          return promise.set_error(400, "Shared user not found");
        }
      }
