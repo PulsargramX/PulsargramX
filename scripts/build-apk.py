@@ -71,8 +71,38 @@ def uncommitted(root):
              "--ignore-submodules=all", "--", ".", ":(exclude,attr:filter=lfs)")
 
 
+def hydrated_lfs_files(root):
+  options = ("-c", "filter.lfs.process=", "-c", "filter.lfs.clean=cat",
+             "-c", "filter.lfs.required=false")
+  if git(root, *options, "diff", "--cached", "--name-only", "-z", "--",
+         ":(attr:filter=lfs)"):
+    raise BuildError(f"Build cache contains staged LFS edits: {root}")
+  names = git(root, *options, "diff", "--name-only", "-z", "HEAD", "--",
+              ":(attr:filter=lfs)")
+  hydrated = []
+  for name in names.split(b"\0"):
+    if not name:
+      continue
+    relative = os.fsdecode(name)
+    path = root / relative
+    pointer = git(root, "show", "HEAD:" + relative)
+    oid = re.search(rb"^oid sha256:([0-9a-f]{64})$", pointer, re.M)
+    size = re.search(rb"^size ([0-9]+)$", pointer, re.M)
+    valid = (pointer.startswith(b"version https://git-lfs.github.com/spec/v1\n") and
+             oid and size and not path.is_symlink() and path.is_file() and
+             path.stat().st_size == int(size[1]))
+    if valid:
+      with path.open("rb") as binary:
+        valid = hashlib.file_digest(binary, "sha256").hexdigest().encode() == oid[1]
+    if not valid:
+      raise BuildError(f"Build cache contains modified LFS input: {path}")
+    hydrated.append((path, pointer))
+  return hydrated
+
+
 def checkout(destination, source, revision, origin):
   source_ready = source.is_dir() and (source / ".git").exists()
+  hydrated = []
   if not (destination / ".git").exists():
     if source_ready:
       run("git", "clone", "--shared", "--no-checkout", str(source), str(destination))
@@ -82,6 +112,7 @@ def checkout(destination, source, revision, origin):
     # Never discard manual edits in the script's persistent checkout.
     if uncommitted(destination).strip():
       raise BuildError(f"Build cache contains tracked edits: {destination}")
+    hydrated = hydrated_lfs_files(destination)
   git(destination, "remote", "set-url", "origin", origin)
   bridge = Path(git(SOURCE, "rev-parse", "--git-common-dir").decode().strip())
   if not bridge.is_absolute():
@@ -98,9 +129,15 @@ def checkout(destination, source, revision, origin):
   except BuildError:
     git(destination, "fetch", "--no-tags", str(source) if source_ready else "origin",
         revision)
+  if hydrated and git(destination, "rev-parse", "HEAD").decode().strip() != revision:
+    # All inputs were verified before writing anything. Restore only binaries
+    # that match this commit, so Git can switch revisions without LFS filters.
+    for path, pointer in hydrated:
+      path.write_bytes(pointer)
   # Materialize LFS pointers without requiring host Git LFS. Hydration happens
   # in the selected build environment, only for CI's three arm64 binaries.
-  git(destination, "-c", "filter.lfs.process=", "-c", "filter.lfs.smudge=cat",
+  git(destination, "-c", "filter.lfs.process=", "-c", "filter.lfs.clean=cat",
+      "-c", "filter.lfs.smudge=cat",
       "-c", "filter.lfs.required=false", "checkout", "--detach", revision)
 
 

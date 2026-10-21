@@ -282,6 +282,72 @@ class BuildCacheTest(unittest.TestCase):
         BUILD.checkout(self.target, self.source, self.second, self.origin)
       self.assertEqual((self.target / "app.txt").read_text(), "manual cache edit\n")
 
+  def lfs_cache(self):
+    self.git(self.source, "config", "filter.lfs.clean", "cat")
+    self.git(self.source, "config", "filter.lfs.required", "false")
+    (self.source / ".gitattributes").write_text("*.so filter=lfs diff=lfs merge=lfs -text\n")
+    binary = b"\x7fELFcached library"
+    def pointer(data):
+      return ("version https://git-lfs.github.com/spec/v1\n"
+              f"oid sha256:{hashlib.sha256(data).hexdigest()}\nsize {len(data)}\n").encode()
+    for name in ("a.so", "b.so"):
+      (self.source / name).write_bytes(pointer(binary))
+    self.git(self.source, "add", ".gitattributes", "a.so", "b.so")
+    self.git(self.source, "commit", "-qm", "Add LFS inputs")
+    first = self.git(self.source, "rev-parse", "HEAD").strip()
+    updated = pointer(b"\x7fELFupdated library")
+    (self.source / "a.so").write_bytes(updated)
+    self.git(self.source, "add", "a.so")
+    self.git(self.source, "commit", "-qm", "Update LFS input")
+    second = self.git(self.source, "rev-parse", "HEAD").strip()
+    with patch.object(BUILD, "SOURCE", self.source):
+      BUILD.checkout(self.target, self.source, first, self.origin)
+    for name in ("a.so", "b.so"):
+      (self.target / name).write_bytes(binary)
+    return first, second, binary, updated
+
+  def test_revision_change_accepts_verified_hydrated_lfs_inputs(self):
+    first, second, binary, updated = self.lfs_cache()
+    native = self.target / "build/native.a"
+    native.parent.mkdir()
+    native.write_bytes(b"keep native cache")
+    with patch.object(BUILD, "SOURCE", self.source):
+      BUILD.checkout(self.target, self.source, second, self.origin)
+    self.assertEqual(self.git(self.target, "rev-parse", "HEAD").strip(), second)
+    self.assertEqual((self.target / "a.so").read_bytes(), updated)
+    self.assertEqual(native.read_bytes(), b"keep native cache")
+    self.assertEqual((self.source / "app.txt").read_text(), "user's uncommitted edit\n")
+
+  def test_same_revision_keeps_verified_lfs_inputs_hydrated(self):
+    first, second, binary, updated = self.lfs_cache()
+    with patch.object(BUILD, "SOURCE", self.source):
+      BUILD.checkout(self.target, self.source, first, self.origin)
+    for name in ("a.so", "b.so"):
+      self.assertEqual((self.target / name).read_bytes(), binary)
+
+  def test_modified_lfs_input_is_rejected_before_other_inputs_change(self):
+    first, second, binary, updated = self.lfs_cache()
+    modified = b"\x7fELFedited library"
+    self.assertEqual(len(binary), len(modified))
+    (self.target / "b.so").write_bytes(modified)
+    with patch.object(BUILD, "SOURCE", self.source), \
+         self.assertRaisesRegex(BUILD.BuildError, "modified LFS input"):
+      BUILD.checkout(self.target, self.source, second, self.origin)
+    self.assertEqual(self.git(self.target, "rev-parse", "HEAD").strip(), first)
+    self.assertEqual((self.target / "a.so").read_bytes(), binary)
+    self.assertEqual((self.target / "b.so").read_bytes(), modified)
+
+  def test_staged_lfs_edits_are_preserved(self):
+    first, second, binary, updated = self.lfs_cache()
+    (self.target / "a.so").write_bytes(updated)
+    self.git(self.target, "-c", "filter.lfs.process=", "-c", "filter.lfs.clean=cat",
+             "-c", "filter.lfs.required=false", "add", "a.so")
+    with patch.object(BUILD, "SOURCE", self.source), \
+         self.assertRaisesRegex(BUILD.BuildError, "staged LFS edits"):
+      BUILD.checkout(self.target, self.source, second, self.origin)
+    self.assertEqual(self.git(self.target, "show", ":a.so").encode(), updated)
+    self.assertEqual((self.target / "b.so").read_bytes(), binary)
+
   def test_working_patch_can_be_reverted_without_discarding_other_files(self):
     with patch.object(BUILD, "SOURCE", self.source):
       BUILD.checkout(self.target, self.source, self.second, self.origin)
