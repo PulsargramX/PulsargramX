@@ -40,6 +40,7 @@ import org.thunderdog.challegram.component.attach.MediaLayout;
 import org.thunderdog.challegram.component.base.SettingView;
 import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.core.Lang;
+import org.thunderdog.challegram.data.BusinessLocationDraft;
 import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.data.TGMessage;
 import org.thunderdog.challegram.data.TGStickerSetInfo;
@@ -448,6 +449,7 @@ public class SettingsController extends ViewController<Void> implements
     this.adapter = new SettingsAdapter(this) {
       @Override
       public void setValuedSetting (ListItem item, SettingView view, boolean isUpdate) {
+        BusinessLocationUi.clearPreview(view);
         boolean hasError = false;
         final int itemId = item.getId();
         if (itemId == R.id.btn_notificationSettings) {
@@ -555,6 +557,8 @@ public class SettingsController extends ViewController<Void> implements
               Td.assertSuggestedAction_17e8d183();
               throw Td.unsupported(action);
           }
+        } else if (itemId == R.id.btn_businessLocation) {
+          BusinessLocationUi.bind(view, BusinessLocationDraft.fromUser(userFull));
         } else if (itemId == R.id.btn_birthdate) {
           if (userFull == null) {
             view.setData(R.string.LoadingInformation);
@@ -623,6 +627,10 @@ public class SettingsController extends ViewController<Void> implements
       .setContentStrings(R.string.LoadingInformation, R.string.PersonalChannelAdd));
     items.add(new ListItem(ListItem.TYPE_SEPARATOR));
     items.add(new ListItem(ListItem.TYPE_INFO_MULTILINE, R.id.btn_bio, R.drawable.baseline_info_24, R.string.UserBio).setContentStrings(R.string.LoadingInformation, R.string.BioNone));
+    if (BusinessLocationDraft.fromUser(userFull) != null) {
+      items.add(new ListItem(ListItem.TYPE_SEPARATOR));
+      items.add(BusinessLocationUi.newItem());
+    }
     items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));
 
     TdApi.SuggestedAction[] actions = tdlib.getSuggestedActions();
@@ -664,6 +672,11 @@ public class SettingsController extends ViewController<Void> implements
       items.add(new ListItem(ListItem.TYPE_SEPARATOR));
     }
     items.add(new ListItem(ListItem.TYPE_SETTING, R.id.btn_languageSettings, R.drawable.baseline_language_24, R.string.Language));
+    items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));
+
+    items.add(new ListItem(ListItem.TYPE_SHADOW_TOP));
+    items.add(new ListItem(ListItem.TYPE_SETTING, R.id.btn_business,
+      R.drawable.baseline_work_24, R.string.TelegramBusiness));
     items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));
 
     if (Settings.instance().getShowAskQuestion() || Settings.instance().getShowFAQ() || Settings.instance().getShowPrivacyPolicy()) {
@@ -828,7 +841,10 @@ public class SettingsController extends ViewController<Void> implements
   @Override
   public boolean onLongClick (View v) {
     final int viewId = v.getId();
-    if (viewId == R.id.btn_build) {
+    if (viewId == R.id.btn_businessLocation) {
+      BusinessLocationUi.showOptions(this, BusinessLocationDraft.fromUser(userFull), true);
+      return true;
+    } else if (viewId == R.id.btn_build) {
       showBuildOptions(true);
       return true;
     }
@@ -897,8 +913,26 @@ public class SettingsController extends ViewController<Void> implements
       headerCell.setProfileAudio(tdlib.myUserId(), userFull.firstProfileAudio);
       checkBirthdate();
       adapter.updateValuedSettingById(R.id.btn_personalChannel);
+      checkBusinessLocation();
       setBio(userFull.bio);
     });
+  }
+
+  private void checkBusinessLocation () {
+    int position = adapter.indexOfViewById(R.id.btn_businessLocation);
+    boolean hasLocation = BusinessLocationDraft.fromUser(userFull) != null;
+    if (position != -1 && !hasLocation) {
+      adapter.getItems().remove(position);
+      adapter.getItems().remove(position - 1);
+      adapter.notifyItemRangeRemoved(position - 1, 2);
+    } else if (position == -1 && hasLocation) {
+      position = adapter.indexOfViewById(R.id.btn_bio) + 1;
+      adapter.getItems().add(position, new ListItem(ListItem.TYPE_SEPARATOR));
+      adapter.getItems().add(position + 1, BusinessLocationUi.newItem());
+      adapter.notifyItemRangeInserted(position, 2);
+    } else if (hasLocation) {
+      adapter.updateValuedSettingById(R.id.btn_businessLocation);
+    }
   }
 
   private static ListItem newBirthdateItem () {
@@ -1189,6 +1223,10 @@ public class SettingsController extends ViewController<Void> implements
       EditBioController c = new EditBioController(context, tdlib);
       c.setArguments(new EditBioController.Arguments(about != null ? about.text : "", 0));
       navigateTo(c);
+    } else if (viewId == R.id.btn_business) {
+      navigateTo(new SettingsBusinessController(context, tdlib));
+    } else if (viewId == R.id.btn_businessLocation) {
+      BusinessLocationUi.open(this, BusinessLocationDraft.fromUser(userFull), false);
     } else if (viewId == R.id.btn_birthdate) {
       tdlib.ui().openBirthdateEditor(this, v, TdlibUi.BirthdateOpenOrigin.PROFILE);
     } else if (viewId == R.id.btn_personalChannel) {

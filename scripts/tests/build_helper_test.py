@@ -325,6 +325,38 @@ class BuildCacheTest(unittest.TestCase):
     for name in ("a.so", "b.so"):
       self.assertEqual((self.target / name).read_bytes(), binary)
 
+  def assert_lfs_checkout_hook_is_preserved(self, custom_hooks):
+    first, second, binary, updated = self.lfs_cache()
+    hooks = self.root / "custom hooks" if custom_hooks else self.target / ".git/hooks"
+    hooks.mkdir(exist_ok=True)
+    if custom_hooks:
+      self.git(self.target, "config", "core.hooksPath", str(hooks))
+    original_config = self.git(self.target, "config", "--local", "--list")
+    hook = hooks / "post-checkout"
+    content = '#!/bin/sh\nprintf failed > checkout-hook-ran\nexit 2\n'
+    hook.write_text(content)
+    hook.chmod(0o755)
+    # Reproduce the hook's failure after checkout has already materialized files.
+    with self.assertRaises(subprocess.CalledProcessError):
+      self.git(self.target, "-c", "filter.lfs.process=", "-c", "filter.lfs.clean=cat",
+               "-c", "filter.lfs.smudge=cat", "-c", "filter.lfs.required=false",
+               "checkout", "--detach", first)
+    (self.target / "checkout-hook-ran").unlink()
+    with patch.object(BUILD, "SOURCE", self.source):
+      BUILD.checkout(self.target, self.source, first, self.origin)
+      self.assertEqual((self.target / "a.so").read_bytes(), binary)
+      BUILD.checkout(self.target, self.source, second, self.origin)
+    self.assertEqual((self.target / "a.so").read_bytes(), updated)
+    self.assertFalse((self.target / "checkout-hook-ran").exists())
+    self.assertEqual(hook.read_text(), content)
+    self.assertEqual(self.git(self.target, "config", "--local", "--list"), original_config)
+
+  def test_cached_lfs_post_checkout_hook_does_not_require_host_lfs(self):
+    self.assert_lfs_checkout_hook_is_preserved(custom_hooks=False)
+
+  def test_configured_lfs_checkout_hooks_are_preserved(self):
+    self.assert_lfs_checkout_hook_is_preserved(custom_hooks=True)
+
   def test_modified_lfs_input_is_rejected_before_other_inputs_change(self):
     first, second, binary, updated = self.lfs_cache()
     modified = b"\x7fELFedited library"

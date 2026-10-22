@@ -74,6 +74,16 @@ public class MediaBottomLocationController extends MediaBottomBaseController<Voi
     super(context, R.string.Location);
   }
 
+  private TdApi.Location initialLocation;
+  private int locationActionLabel = R.string.SendCurrentLocation;
+  private boolean locationPicker;
+
+  public void setLocationPicker (TdApi.Location initialLocation, int actionLabel) {
+    this.initialLocation = initialLocation;
+    this.locationActionLabel = actionLabel;
+    this.locationPicker = true;
+  }
+
   @Override
   public int getId () {
     return R.id.controller_media_location;
@@ -81,7 +91,7 @@ public class MediaBottomLocationController extends MediaBottomBaseController<Voi
 
   @Override
   protected int getMenuId () {
-    return mediaLayout.inSpecificMode() ? 0 : R.id.menu_search;
+    return mediaLayout.inSpecificMode() && !locationPicker ? 0 : R.id.menu_search;
   }
 
   @Override
@@ -101,7 +111,7 @@ public class MediaBottomLocationController extends MediaBottomBaseController<Voi
   @Override
   public void onMenuItemPressed (int id, View view) {
     if (id == R.id.menu_btn_search) {
-      if (firstLoaded && currentLocation != null) {
+      if ((firstLoaded || locationPicker) && currentLocation != null) {
         mediaLayout.getHeaderView().openSearchMode();
         headerView = mediaLayout.getHeaderView();
         hideMap();
@@ -277,6 +287,10 @@ public class MediaBottomLocationController extends MediaBottomBaseController<Voi
 
     mapWrap.addView(textWrap);
 
+    if (initialLocation != null) {
+      mapView.setMarkerPosition(initialLocation.latitude, initialLocation.longitude);
+    }
+
     params = FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ShadowView.simpleBottomShadowHeight(), Gravity.TOP);
     params.topMargin = mapHeight + barHeight + marginOffset;
 
@@ -325,7 +339,7 @@ public class MediaBottomLocationController extends MediaBottomBaseController<Voi
 
   @Override
   protected boolean canExpandHeight () {
-    return !mediaLayout.inSpecificMode(); // FIXME?
+    return locationPicker || !mediaLayout.inSpecificMode(); // FIXME?
   }
 
   private boolean sendingLiveLocation;
@@ -431,17 +445,17 @@ public class MediaBottomLocationController extends MediaBottomBaseController<Voi
     locationView.setIsCustom(custom);
     if (custom) {
       if (selectedPlace == null) {
-        textView.setText(Lang.getString(R.string.SendCurrentLocation));
+        textView.setText(Lang.getString(locationActionLabel));
         locationView.setIsPlace(false);
         setLocationData(MathUtils.roundDouble(location.getLatitude()) + ", " + MathUtils.roundDouble(location.getLongitude()));
       }
     } else {
-      textView.setText(Lang.getString(R.string.SendCurrentLocation));
+      textView.setText(Lang.getString(locationActionLabel));
       locationView.setIsPlace(false);
       setLocationData(location.getAccuracy() > 0 ? Lang.plural(R.string.AccurateToMeters, (int) location.getAccuracy()) : null);
     }
     currentLocation = location;
-    if (mediaLayout.inSpecificMode()) {
+    if (mediaLayout.inSpecificMode() && !locationPicker) {
       lastLocation = currentLocation;
     } else if (allowLocationRequests) {
       if (!preventRequests && (lastLocation == null || lastLocation.distanceTo(location) >= 200) || !hasPlaces()) {

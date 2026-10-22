@@ -279,10 +279,55 @@ public class ImeAnimationTest {
     int heldLayoutRequests = root.layoutRequests;
     root.frame();
     check(root.layoutRequests == heldLayoutRequests, "A held gesture needs no repeated layout");
+    // InsetsAnimationControlImpl.finish(true) restores the shown insets but sets
+    // the fraction to 1, even though the predictive hide gesture was cancelled.
+    lostGesture.fraction = 1f;
+    root.applied.clear();
     callback.onEnd(lostGesture);
+    check(root.applied.isEmpty(),
+      "Ending a cancelled gesture must not synthesize hidden insets from the finish fraction");
     root.frame();
     check(root.applied.get(root.applied.size() - 1) == 320,
       "Cancelled predictive fallback keeps the rendered shown height");
+
+    for (int repeat = 0; repeat < 3; repeat++) {
+      InsetsAnimation reversedGesture = new InsetsAnimation(1, -1);
+      callback.onPrepare(reversedGesture);
+      root.apply(callback, 0);
+      callback.onStart(reversedGesture, new InsetsAnimation.Bounds());
+      root.applied.clear();
+      for (float fraction : new float[] {.08f, .04f, .01f}) {
+        reversedGesture.fraction = fraction;
+        root.frame();
+      }
+      reversedGesture.fraction = 1f;
+      callback.onEnd(reversedGesture);
+      check(!root.applied.contains(0),
+        "Finishing between sampled frames must never flash the keyboard's hidden geometry");
+      root.apply(callback, 320);
+      root.frame();
+      check(root.applied.get(root.applied.size() - 1) == 320 && !callback.isRunning(),
+        "Repeated cancellations settle at the authoritative shown height without a restart");
+      check(root.nextFrame.isEmpty(), "Cancellation must stop fallback polling");
+    }
+
+    for (boolean finalProgressDelivered : new boolean[] {false, true}) {
+      InsetsAnimation nativeGesture = new InsetsAnimation(1, -1);
+      callback.onPrepare(nativeGesture);
+      root.apply(callback, 0);
+      callback.onStart(nativeGesture, new InsetsAnimation.Bounds());
+      nativeGesture.fraction = .08f;
+      progress(callback, nativeGesture, 294);
+      nativeGesture.fraction = 0f;
+      progress(callback, nativeGesture, 320);
+      nativeGesture.fraction = 1f;
+      if (finalProgressDelivered) progress(callback, nativeGesture, 320);
+      root.applied.clear();
+      callback.onEnd(nativeGesture);
+      root.frame();
+      check(root.applied.equals(List.of(320)),
+        "A terminal fraction must not overwrite native cancellation geometry either");
+    }
 
     InsetsAnimation committedGesture = new InsetsAnimation(1, -1);
     callback.onPrepare(committedGesture);
@@ -292,9 +337,10 @@ public class ImeAnimationTest {
     root.frame();
     committedGesture.fraction = 1f;
     callback.onEnd(committedGesture);
+    root.apply(callback, 0);
     root.frame();
     check(root.applied.get(root.applied.size() - 1) == 0,
-      "A committed gesture must apply its final live fraction even without a final draw");
+      "A committed gesture must settle from final window insets even without a final sample");
     check(root.nextFrame.isEmpty(), "Predictive completion must stop polling");
 
     callback.skipNextAnimation(250);

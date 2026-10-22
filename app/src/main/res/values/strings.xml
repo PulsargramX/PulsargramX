@@ -6399,4 +6399,21 @@
   <string name="ProfileMusicAccessibility">Profile music: %1$s by %2$s. Open playlist.</string>
   <string name="ProfileMusicLoadMore">Load More</string>
   <string name="ProfileMusicUndo">Undo</string>
+  <string name="TelegramBusiness">Telegram Business</string>
+  <string name="TelegramBusinessSubtitle">Subscribe to **Telegram Premium** to unlock these additional business features.</string>
+  <string name="TelegramBusinessSubscribedSubtitle">You have now unlocked these additional business features.</string>
+  <string name="BusinessSubscribe">Subscribe to Telegram Premium</string>
+  <string name="BusinessPremiumUnavailable">Telegram Premium subscriptions are currently unavailable for this account.</string>
+  <string name="BusinessLocationInfo">Display the location of your business on your account.</string>
+  <string name="BusinessLocationAddress">Enter Address</string>
+  <string name="BusinessLocationMap">Set Location on Map</string>
+  <string name="BusinessLocationSelect">Set This Location</string>
+  <string name="BusinessLocationClear">Remove Location</string>
+  <string name="BusinessLocationClearMessage">Are you sure you want to remove business location?</string>
+  <string name="BusinessLocationUnsavedChanges">You have changed the business location. Apply changes?</string>
+  <string name="BusinessLocationCopied">Business address copied</string>
+  <string name="ProfileLocationCopy">Copy address</string>
+  <string name="ProfileLocationView">View location</string>
+  <string name="ProfileLocationMaps">Open in Maps</string>
+  <string name="ProfileLocationEdit">Change location</string>
 </resources>

@@ -325,7 +325,7 @@ public class SettingView extends FrameLayoutFix implements FactorAnimator.Target
     if (type == TYPE_INFO_MULTILINE) {
       if (text != null) {
         int paddingLeft = measurePaddingLeft();
-        int paddingRight = Screen.dp(17f);
+        int paddingRight = Screen.dp(17f) + getDrawModifiersWidth();
         text.get(MeasureSpec.getSize(widthMeasureSpec) - paddingLeft - paddingRight);
       }
       if (lastMeasuredWidth != MeasureSpec.getSize(widthMeasureSpec) || lastMeasuredHeight != getCurrentHeight()) {
@@ -578,13 +578,7 @@ public class SettingView extends FrameLayoutFix implements FactorAnimator.Target
       availWidth = totalWidth - paddingLeft - paddingRight;
     }
 
-    if (drawModifiers != null) {
-      int maxWidth = 0;
-      for (DrawModifier modifier : drawModifiers) {
-        maxWidth = Math.max(maxWidth, modifier.getWidth());
-      }
-      availWidth -= maxWidth;
-    }
+    availWidth -= getDrawModifiersWidth();
 
     if (counter != null) {
       availWidth -= counter.getScaledWidth(Screen.dp(24f) + Screen.dp(8f));
@@ -961,6 +955,27 @@ public class SettingView extends FrameLayoutFix implements FactorAnimator.Target
 
   @Nullable
   private List<DrawModifier> drawModifiers;
+  private int lastDrawModifiersWidth;
+
+  private int getDrawModifiersWidth () {
+    int width = 0;
+    if (drawModifiers != null) {
+      for (DrawModifier modifier : drawModifiers) {
+        width = Math.max(width, modifier.getWidth());
+      }
+    }
+    return width;
+  }
+
+  private void onDrawModifiersChanged () {
+    int width = getDrawModifiersWidth();
+    if (lastDrawModifiersWidth != width) {
+      lastDrawModifiersWidth = width;
+      buildLayout();
+      requestLayout();
+    }
+    invalidate();
+  }
 
   private int indexOfModifier (DrawModifier modifier) {
     return drawModifiers != null ? drawModifiers.indexOf(modifier) : -1;
@@ -975,7 +990,7 @@ public class SettingView extends FrameLayoutFix implements FactorAnimator.Target
         drawModifiers.add(0, drawModifier);
       else
         drawModifiers.add(drawModifier);
-      invalidate();
+      onDrawModifiersChanged();
     } else if (inFront && i != 0) {
       drawModifiers.remove(i);
       drawModifiers.add(0, drawModifier);
@@ -987,7 +1002,7 @@ public class SettingView extends FrameLayoutFix implements FactorAnimator.Target
     int i = indexOfModifier(drawModifier);
     if (i != -1) {
       drawModifiers.remove(i);
-      invalidate();
+      onDrawModifiersChanged();
     }
   }
 
@@ -1003,13 +1018,14 @@ public class SettingView extends FrameLayoutFix implements FactorAnimator.Target
         drawModifiers = new ArrayList<>();
       }
       drawModifiers.add(drawModifier);
-      invalidate();
+      onDrawModifiersChanged();
     }
   }
 
   public void clearDrawModifiers () {
     if (drawModifiers != null && !drawModifiers.isEmpty()) {
       drawModifiers.clear();
+      onDrawModifiersChanged();
     }
   }
 

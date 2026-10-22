@@ -136,9 +136,13 @@ def checkout(destination, source, revision, origin):
       path.write_bytes(pointer)
   # Materialize LFS pointers without requiring host Git LFS. Hydration happens
   # in the selected build environment, only for CI's three arm64 binaries.
+  # git-lfs can install post-checkout hooks there during a previous build.
+  # Skip hooks for this pointer-only checkout without changing stored hooks
+  # or the source repository's container bridge.
   git(destination, "-c", "filter.lfs.process=", "-c", "filter.lfs.clean=cat",
       "-c", "filter.lfs.smudge=cat",
-      "-c", "filter.lfs.required=false", "checkout", "--detach", revision)
+      "-c", "filter.lfs.required=false", "-c", "core.hooksPath=/dev/null",
+      "checkout", "--detach", revision)
 
 
 def dependencies(source, destination, revision, nested=False):

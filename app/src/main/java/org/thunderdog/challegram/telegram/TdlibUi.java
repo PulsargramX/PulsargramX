@@ -123,6 +123,7 @@ import org.thunderdog.challegram.ui.RequestController;
 import org.thunderdog.challegram.ui.SettingHolder;
 import org.thunderdog.challegram.ui.Settings2FAController;
 import org.thunderdog.challegram.ui.SettingsController;
+import org.thunderdog.challegram.ui.SettingsBusinessController;
 import org.thunderdog.challegram.ui.SettingsDataController;
 import org.thunderdog.challegram.ui.SettingsFoldersController;
 import org.thunderdog.challegram.ui.SettingsLanguageController;
@@ -4192,6 +4193,10 @@ public class TdlibUi extends Handler {
               result = new SettingsDataController(context.context(), context.tdlib());
               break;
             }
+            case TdApi.SettingsSectionBusiness.CONSTRUCTOR: {
+              result = new SettingsBusinessController(context.context(), context.tdlib());
+              break;
+            }
             case TdApi.SettingsSectionQrCode.CONSTRUCTOR:
             case TdApi.SettingsSectionSearch.CONSTRUCTOR:
             case TdApi.SettingsSectionMyStars.CONSTRUCTOR:
@@ -4199,7 +4204,6 @@ public class TdlibUi extends Handler {
             case TdApi.SettingsSectionPowerSaving.CONSTRUCTOR:
             case TdApi.SettingsSectionPremium.CONSTRUCTOR:
             case TdApi.SettingsSectionSendGift.CONSTRUCTOR:
-            case TdApi.SettingsSectionBusiness.CONSTRUCTOR:
             case TdApi.SettingsSectionInAppBrowser.CONSTRUCTOR:
             case TdApi.SettingsSectionFeatures.CONSTRUCTOR: {
               unsupported.run();

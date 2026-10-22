@@ -405,7 +405,9 @@ public class RootFrameLayout extends FrameLayoutFix {
     @Override
     public void onEnd (android.view.WindowInsetsAnimation animation) {
       if (animation == sampledAnimation) {
-        updateInsetsBeforeMeasure();
+        // finish(true) also sets the fraction to 1 when a predictive hide is cancelled.
+        // It no longer describes keyboard geometry: keep the last live insets until
+        // the final window insets arrive instead of synthesizing a hidden keyboard.
         if (reportedFallback) {
           android.util.Log.w("ImeAnimation", "IME fallback ended: root=" +
             Integer.toHexString(System.identityHashCode(root)) + " frames=" + sampledFrames +

@@ -62,6 +62,7 @@ import org.thunderdog.challegram.component.attach.AvatarPickerManager;
 import org.thunderdog.challegram.component.base.SettingView;
 import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.core.Lang;
+import org.thunderdog.challegram.data.BusinessLocationDraft;
 import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.data.TGFoundChat;
 import org.thunderdog.challegram.data.TGUser;
@@ -164,6 +165,7 @@ public class ProfileController extends ViewController<ProfileController.Args> im
   ViewControllerPagerAdapter.ControllerProvider,
   ViewPager.OnPageChangeListener,
   View.OnClickListener,
+  View.OnLongClickListener,
   MessageListener,
   ChatListener,
   NotificationSettingsListener,
@@ -1814,6 +1816,7 @@ public class ProfileController extends ViewController<ProfileController.Args> im
 
       @Override
       protected void setValuedSetting (ListItem item, SettingView view, boolean isUpdate) {
+        BusinessLocationUi.clearPreview(view);
         if (item.getViewType() == ListItem.TYPE_INFO_MULTILINE) {
           view.setAllowMultiLineName(item.getId() == R.id.btn_username);
         }
@@ -1850,6 +1853,8 @@ public class ProfileController extends ViewController<ProfileController.Args> im
           } else {
             view.setName(Lang.getString(R.string.LoadingInformation));
           }
+        } else if (itemId == R.id.btn_businessLocation) {
+          BusinessLocationUi.bind(view, BusinessLocationDraft.fromUser(userFull));
         } else if (itemId == R.id.btn_profileNote) {
           view.setText(noteWrapper);
           view.setName(R.string.NotesProfileLabel);
@@ -2763,6 +2768,11 @@ public class ProfileController extends ViewController<ProfileController.Args> im
         items.add(newDescriptionItem());
         addedCount++;
       }
+      if (BusinessLocationDraft.fromUser(userFull) != null) {
+        if (addedCount > 0) items.add(new ListItem(ListItem.TYPE_SEPARATOR));
+        items.add(BusinessLocationUi.newItem());
+        addedCount++;
+      }
     }
 
     if (!currentNote.isEmpty()) {
@@ -2820,6 +2830,7 @@ public class ProfileController extends ViewController<ProfileController.Args> im
     checkBirthdate();
     checkPersonalChat();
     checkDescription();
+    checkBusinessLocation();
     checkGroupsInCommon();
 
     /*if (userFull.commonChatCount > 0) {
@@ -2909,7 +2920,10 @@ public class ProfileController extends ViewController<ProfileController.Args> im
         if (baseAdapter.indexOfViewById(R.id.btn_profileNote) != -1) {
           index++;
         }
-        addTopItem(newPhoneItem(), index); // after peer_id, username, birthdate, description, note
+        if (baseAdapter.indexOfViewById(R.id.btn_businessLocation) != -1) {
+          index++;
+        }
+        addTopItem(newPhoneItem(), index); // after profile details and note
       }
     } else if (hasPhone) {
       updateValuedItem(R.id.btn_phone);
@@ -2924,7 +2938,8 @@ public class ProfileController extends ViewController<ProfileController.Args> im
     } else {
       baseAdapter.updateValuedSettingById(id);
     }
-    if (id == R.id.btn_description || id == R.id.btn_profileNote) {
+    if (id == R.id.btn_description || id == R.id.btn_profileNote ||
+        id == R.id.btn_businessLocation) {
       onItemsHeightProbablyChanged(); // height probably changed
     }
   }
@@ -3108,6 +3123,27 @@ public class ProfileController extends ViewController<ProfileController.Args> im
       return;
     }
     refreshPersonalChannelSection();
+  }
+
+  private void checkBusinessLocation () {
+    if (isEditing() || baseAdapter == null) return;
+    int foundIndex = baseAdapter.indexOfViewById(R.id.btn_businessLocation);
+    boolean hasLocation = BusinessLocationDraft.fromUser(userFull) != null;
+    if (foundIndex != -1 && !hasLocation) {
+      removeTopItem(foundIndex);
+    } else if (foundIndex == -1 && hasLocation) {
+      int index = 0;
+      for (ListItem item : baseAdapter.getItems()) {
+        if (item.getId() == R.id.btn_profileNote || item.getId() == R.id.btn_phone ||
+            item.getId() == R.id.btn_encryptionKey || item.getId() == R.id.btn_notifications) break;
+        if (item.getId() == R.id.btn_peer_id || item.getId() == R.id.btn_username ||
+            item.getId() == R.id.btn_birthdate || item.getId() == R.id.btn_description ||
+            item.getId() == OPEN_WEB_APP_ID || item.getId() == WEB_APP_PREVIEWS_ID) index++;
+      }
+      addTopItem(BusinessLocationUi.newItem(), index);
+    } else if (hasLocation) {
+      updateValuedItem(R.id.btn_businessLocation);
+    }
   }
 
   private void checkDescription () {
@@ -5129,6 +5165,16 @@ public class ProfileController extends ViewController<ProfileController.Args> im
   private @Nullable String descriptionLanguage;
 
   @Override
+  public boolean onLongClick (View view) {
+    if (view.getId() == R.id.btn_businessLocation) {
+      BusinessLocationUi.showOptions(this, BusinessLocationDraft.fromUser(userFull),
+        user != null && tdlib.isSelfUserId(user.id));
+      return true;
+    }
+    return false;
+  }
+
+  @Override
   public void onClick (View v) {
     final int viewId = v.getId();
     if (viewId == R.id.btn_chatBoost) {
@@ -5211,6 +5257,8 @@ public class ProfileController extends ViewController<ProfileController.Args> im
       icons.append(R.drawable.baseline_forward_24);
 
       showOptions("@" + tdlib.chatUsername(chat.id), ids.get(), strings.get(), null, icons.get());
+    } else if (viewId == R.id.btn_businessLocation) {
+      BusinessLocationUi.open(this, BusinessLocationDraft.fromUser(userFull), false);
     } else if (viewId == R.id.btn_birthdate) {
       TdApi.Birthdate birthdate = userFull != null ? userFull.birthdate : null;
       if (birthdate != null) {
@@ -5858,6 +5906,12 @@ public class ProfileController extends ViewController<ProfileController.Args> im
             }
           }
           return lastUsernameAddHeight + Screen.dp(76f);
+        } else if (itemId == R.id.btn_businessLocation) {
+          TdApi.BusinessLocation location = BusinessLocationDraft.fromUser(userFull);
+          TextWrapper wrapper = BusinessLocationUi.addressText(location);
+          wrapper.get(Math.max(0, getTextWidth(width) -
+            (location != null && location.location != null ? Screen.dp(56) : 0)));
+          return Math.max(wrapper.getHeight() + Screen.dp(58), Screen.dp(76));
         } else if (itemId == R.id.btn_description || itemId == R.id.btn_profileNote) {
           TextWrapper wrapper = itemId == R.id.btn_profileNote ? noteWrapper : aboutWrapper;
           if (wrapper != null) {
@@ -6702,6 +6756,7 @@ public class ProfileController extends ViewController<ProfileController.Args> im
         checkGroupsInCommon();
         checkPersonalChat();
         checkDescription();
+        checkBusinessLocation();
         if (mode == Mode.EDIT_BOT_USER) {
           updateValuedItem(R.id.btn_botDescription);
         }

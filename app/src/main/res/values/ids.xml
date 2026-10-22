@@ -1563,4 +1563,11 @@
   <item type="id" name="btn_saveToSavedMessages" />
   <item type="id" name="controller_profile_music_picker" />
   <item type="id" name="btn_profileMusicUndo" />
+  <item type="id" name="controller_business" />
+  <item type="id" name="controller_businessLocation" />
+  <item type="id" name="btn_business" />
+  <item type="id" name="btn_businessLocation" />
+  <item type="id" name="btn_businessLocationMap" />
+  <item type="id" name="businessLocationPreview" />
+  <item type="id" name="btn_map" />
 </resources>
