@@ -11563,6 +11563,7 @@ public class MessagesController extends ViewController<MessagesController.Argume
     runOnUiThreadOptional(() -> {
       if (getChatId() == chatId) {
         checkActionBar();
+        manager.checkAccountInfo();
       }
     });
   }
@@ -11840,8 +11841,12 @@ public class MessagesController extends ViewController<MessagesController.Argume
   public void onUserUpdated (TdApi.User user) {
     if (chat != null && user != null && headerCell != null && TD.getUserId(chat) == user.id) {
       runOnUiThreadOptional(() -> {
+        if (chat == null || TD.getUserId(chat) != user.id) {
+          return;
+        }
         headerCell.setEmojiStatus(user);
         checkCanSendMessagesToUser(false);
+        manager.checkAccountInfo();
       });
     }
   }

@@ -39,8 +39,10 @@ import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.config.ClientPolicy;
 import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.core.Lang;
+import org.thunderdog.challegram.data.ChatAccountInfo;
 import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.data.TGMessage;
+import org.thunderdog.challegram.data.TGMessageAccountInfo;
 import org.thunderdog.challegram.data.TGMessageBotInfo;
 import org.thunderdog.challegram.data.TGMessagePoll;
 import org.thunderdog.challegram.data.TGMessageVideo;
@@ -1191,6 +1193,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   // Private Loaders
 
   private void loadFromStart (MessageId fromId, TGMessage startMessage) {
+    insertMessageOnLoad = false;
     adapter.reset(startMessage);
     scrollToPositionWithOffsetImpl(0, 0);
     loader.loadFromStart(fromId);
@@ -1198,6 +1201,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   }
 
   private void loadFromMessage (MessageId messageId, int highlightMode, boolean force) {
+    insertMessageOnLoad = false;
     if (force) {
       adapter.reset(null);
     }
@@ -1326,6 +1330,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
     switch (mode) {
       case MessagesLoader.MODE_INITIAL:
       case MessagesLoader.MODE_REPEAT_INITIAL: {
+        insertMessageOnLoad = false;
         if (mode == MessagesLoader.MODE_REPEAT_INITIAL) {
           adapter.resetMessages(items);
         } else {
@@ -1376,10 +1381,30 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
     refreshPendingMessage();
   }
 
-  // Bot info
+  // Chat introduction headers
 
   private TGMessage headerMessage;
   private boolean insertMessageOnLoad;
+
+  public void checkAccountInfo () {
+    TdApi.Chat chat = controller.getChat();
+    long userId = chat != null ? TD.getUserId(chat) : 0;
+    TdApi.User user = userId != 0 ? tdlib.cache().user(userId) : null;
+    TdApi.AccountInfo info = chat != null && chat.id == loader.getChatId() &&
+      loader.getSpecialMode() == MessagesLoader.SPECIAL_MODE_NONE &&
+      !loader.hasSearchFilter() && loader.getMessageThread() == null &&
+      loader.getMessageTopicId() == null && !controller.inPreviewMode() &&
+      !controller.isInForceTouchMode() ? ChatAccountInfo.fromChat(chat, user) : null;
+    if (info == null) {
+      if (headerMessage instanceof TGMessageAccountInfo) {
+        setHeaderMessage(null);
+      }
+    } else if (headerMessage instanceof TGMessageAccountInfo && !headerMessage.isDestroyed()) {
+      ((TGMessageAccountInfo) headerMessage).update(user, info);
+    } else if (headerMessage == null || headerMessage instanceof TGMessageAccountInfo) {
+      setHeaderMessage(new TGMessageAccountInfo(this, chat.id, user, info));
+    }
+  }
 
   private boolean shouldInsertHeaderMessage () {
     TGMessage topMessage = adapter.getTopMessage();
@@ -1404,16 +1429,28 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   }
 
   public void clearHeaderMessage () {
-    if (this.headerMessage != null) {
+    if (this.headerMessage != null && !this.headerMessage.isDestroyed()) {
       this.headerMessage.onDestroy();
     }
     this.headerMessage = null;
     this.insertMessageOnLoad = false;
   }
 
-  public void setHeaderMessage (TGMessage headerMessage) {
+  public void setHeaderMessage (@Nullable TGMessage headerMessage) {
+    if (this.headerMessage == headerMessage) {
+      return;
+    }
+    TGMessage previousHeader = this.headerMessage;
+    if (previousHeader != null) {
+      int index = adapter.indexOfMessage(message -> message == previousHeader);
+      if (index != -1) {
+        adapter.removeItem(index);
+      } else if (!previousHeader.isDestroyed()) {
+        previousHeader.onDestroy();
+      }
+    }
     this.headerMessage = headerMessage;
-    if (insertMessageOnLoad && shouldInsertHeaderMessage()) {
+    if (headerMessage != null && insertMessageOnLoad && shouldInsertHeaderMessage()) {
       if (headerMessage instanceof TGMessageBotInfo) {
         ((TGMessageBotInfo) headerMessage).setBoundAdapter(adapter);
       }
@@ -1446,7 +1483,8 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   }
 
   private void checkTopEndReached (List<TGMessage> items, boolean willRepeat, boolean canLoadTop) {
-    if (shouldInsertHeaderMessage()) {
+    checkAccountInfo();
+    if (!canLoadTop || shouldInsertHeaderMessage()) {
       boolean topEndReached;
       if (!canLoadTop) {
         topEndReached = true;
@@ -1469,6 +1507,8 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   }
 
   private void insertHeaderMessageIfNeeded () {
+    checkAccountInfo();
+    insertMessageOnLoad = true;
     ThreadInfo messageThread = loader.getMessageThread();
     if (messageThread != null && shouldInsertHeaderMessage()) {
       TGMessage threadHeaderMessage = messageThread.buildHeaderMessage(this);
@@ -1480,8 +1520,6 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
         ((TGMessageBotInfo) headerMessage).setBoundAdapter(adapter);
       }
       adapter.addMessage(headerMessage, true, false);
-    } else {
-      insertMessageOnLoad = true;
     }
   }
 

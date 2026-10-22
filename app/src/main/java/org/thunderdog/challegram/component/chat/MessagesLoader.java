@@ -1147,7 +1147,7 @@ public class MessagesLoader implements Client.ResultHandler {
   private boolean foundUnreadAtLeastOnce;
   private final Object lock = new Object();
 
-  private boolean hasSearchFilter () {
+  public boolean hasSearchFilter () {
     return searchFilter != null;
   }
 

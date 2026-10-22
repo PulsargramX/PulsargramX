@@ -121,6 +121,12 @@
   <string name="CountryCode">Country code</string>
   <string name="login_SmsHint">We will send an SMS with a confirmation code to your phone number.</string>
   <string name="Registration">Registration</string>
+  <string name="ContactInfoIsNotContact">Not a contact</string>
+  <string name="ContactInfoIsContact">Contact</string>
+  <string name="ContactInfoPhone">Phone number</string>
+  <string name="ContactInfoPhoneFragment">Anonymous</string>
+  <string name="ContactInfoRegistration">Registration</string>
+  <string name="ContactInfoNotVerified">Not an official account</string>
   <string name="login_FirstName">First name</string>
   <string name="BotName">Name</string>
   <string name="LastName">Last name</string>
