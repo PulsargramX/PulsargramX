@@ -71,10 +71,14 @@ class SigningConfigTest(unittest.TestCase):
     )
     (self.root / "release.jks").write_bytes(b"fake keystore")
 
-  def test_certificate_password_uses_child_environment_and_root_relative_paths(self):
+  def test_certificate_file_ignores_stdout_and_keeps_password_in_environment(self):
     previous_password = os.environ.get("CLIENT_KEYSTORE_PASSWORD")
+    def export(arguments, **options):
+      Path(arguments[arguments.index("-file") + 1]).write_bytes(b"certificate DER")
+      return subprocess.CompletedProcess(arguments, 0,
+        stdout=b"[0.002s][warning][os,container] Cgroup memory controller path moved\n")
     with patch.object(VERIFY.subprocess, "run") as run:
-      run.return_value.stdout = b"certificate DER"
+      run.side_effect = export
       build_tools, certificate = VERIFY.local_signing_config(self.root)
       arguments, = run.call_args.args
       options = run.call_args.kwargs
@@ -88,6 +92,17 @@ class SigningConfigTest(unittest.TestCase):
       self.assertEqual(certificate, hashlib.sha256(b"certificate DER").hexdigest())
       self.assertEqual(options["capture_output"], True)
       self.assertEqual(os.environ.get("CLIENT_KEYSTORE_PASSWORD"), previous_password)
+
+  def test_missing_or_empty_certificate_file_is_rejected(self):
+    for write_file in (False, True):
+      def export(arguments, **options):
+        if write_file:
+          Path(arguments[arguments.index("-file") + 1]).write_bytes(b"")
+        return subprocess.CompletedProcess(arguments, 0, stdout=b"unrelated output")
+      with self.subTest(write_file=write_file), \
+           patch.object(VERIFY.subprocess, "run", side_effect=export), \
+           self.assertRaisesRegex(ValueError, "signing configuration|no certificate"):
+        VERIFY.local_signing_config(self.root)
 
   def test_keytool_failure_hides_command_output(self):
     with patch.object(VERIFY.subprocess, "run") as run:

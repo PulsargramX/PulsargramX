@@ -19,6 +19,9 @@ import time
 
 SOURCE = Path(__file__).resolve().parent.parent
 BUILD_TOOLS = ("git", "make", "g++", "gperf", "php")
+MIB = 1024 ** 2
+GIB = 1024 ** 3
+CGROUP_ROOTS = (Path("/sys/fs/cgroup"), Path("/run/host/sys/fs/cgroup"))
 SPEC = importlib.util.spec_from_file_location("release", SOURCE / "scripts/verify-release.py")
 RELEASE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(RELEASE)
@@ -61,6 +64,72 @@ def execute(command, **options):
     except ProcessLookupError:
       pass
     process.wait()
+
+
+def memory_limit():
+  try:
+    memory = {name: int(value.split()[0]) * 1024
+              for name, value in (line.split(":", 1)
+                                  for line in Path("/proc/meminfo").read_text().splitlines())}
+    total, available = memory["MemTotal"], memory["MemAvailable"]
+  except (OSError, KeyError, ValueError):
+    raise BuildError("Cannot determine available RAM for a memory-limited APK build.") from None
+  # Leave room for the desktop and existing applications, even on a busy host.
+  reserve = max(4 * GIB, total // 4)
+  maximum = min(12 * GIB, total // 2, available - reserve) // MIB * MIB
+  if maximum < 6 * GIB:
+    raise BuildError("Not enough available RAM for an APK build: need at least 6 GiB "
+                     f"after reserving {reserve / GIB:.1f} GiB for other applications.")
+  return maximum
+
+
+def memory_high(maximum):
+  # Kernel cgroup limits are page-aligned; whole MiB also survive readback.
+  return maximum * 5 // (6 * MIB) * MIB
+
+
+def memory_scope_command(command, unit, maximum):
+  return ["systemd-run", "--user", "--scope", "--quiet", "--collect",
+          "--expand-environment=no", "--unit=" + unit,
+          "--description=APK release build",
+          "-p", f"MemoryHigh={memory_high(maximum)}", "-p", f"MemoryMax={maximum}",
+          "-p", "MemorySwapMax=0", "-p", "OOMPolicy=kill", "-p", "TimeoutStopSec=10s",
+          "--", *command]
+
+
+def verify_memory_scope(unit, maximum):
+  if not unit or not maximum or maximum <= 0:
+    raise BuildError("APK workers must run in a memory-limited systemd scope.")
+  group = run("systemctl", "--user", "show", unit, "-p", "ControlGroup", "--value").decode().strip()
+  if not group.startswith("/") or not group.endswith("/" + unit):
+    raise BuildError("Cannot locate the APK build's memory scope.")
+  expected = {"memory.max": maximum, "memory.high": memory_high(maximum),
+              "memory.swap.max": 0, "memory.oom.group": 1}
+  for root in CGROUP_ROOTS:
+    scope = root / group.lstrip("/")
+    try:
+      if str(os.getpid()) not in (scope / "cgroup.procs").read_text().split():
+        continue
+      if all(int((scope / name).read_text()) == value for name, value in expected.items()):
+        return
+    except (OSError, ValueError):
+      continue
+  # Distrobox exec processes do not inherit the host launcher's cgroup. Check
+  # the worker itself, using the host mount when its cgroup namespace is private.
+  raise BuildError("APK worker memory limits are not enforced; refusing to start Gradle.")
+
+
+def stop_memory_scope(unit):
+  try:
+    stopped = subprocess.run(["systemctl", "--user", "stop", unit],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+    if stopped.returncode:
+      state = subprocess.run(["systemctl", "--user", "show", unit, "-p", "ActiveState", "--value"],
+                             capture_output=True, text=True, timeout=5)
+      if state.returncode or state.stdout.strip() not in ("inactive", "failed"):
+        raise BuildError("Cannot stop the APK build's memory scope: " + unit)
+  except subprocess.TimeoutExpired:
+    raise BuildError("Timed out stopping the APK build's memory scope: " + unit) from None
 
 
 def uncommitted(root):
@@ -329,6 +398,8 @@ def main():
     "Success prints only the absolute APK path. Builds committed HEAD by default; "
     "--working-tree includes tracked edits (stage new files first). "
     "Private cache and logs: build/local-apk, or TGX_BUILD_CACHE_DIR. "
+    "Requires a systemd user session; builds use at most 12 GiB RAM and no swap, "
+    "reserving at least 4 GiB for other applications. "
     "Requires configured local.properties, Android SDK, JDK 25, and "
     "git, make, g++, gperf and PHP on the host or in the configured development container."
   ))
@@ -342,9 +413,13 @@ def main():
                       help=("auto (host with all build tools, otherwise Distrobox), "
                             "host, or a Distrobox name"))
   parser.add_argument("--worker", nargs=2, metavar=("PROJECT", "CACHE"), help=argparse.SUPPRESS)
+  parser.add_argument("--memory-scope", help=argparse.SUPPRESS)
+  parser.add_argument("--memory-limit", type=int, help=argparse.SUPPRESS)
   args = parser.parse_args()
   os.umask(0o077)
   if args.worker:
+    verify_memory_scope(args.memory_scope, args.memory_limit)
+    print(f"Build memory limit: {args.memory_limit / GIB:.1f} GiB RAM; swap disabled", flush=True)
     worker(*(Path(value) for value in args.worker), args.edition)
     return
   if not (SOURCE / "local.properties").is_file():
@@ -415,8 +490,10 @@ def main():
         patch = uncommitted(SOURCE)
         if args.working_tree and patch:
           apply_working_patch(project, saved_patch, patch)
+        maximum = memory_limit()
+        unit = f"client-apk-{os.getpid()}-{time.monotonic_ns()}.scope"
         command = [sys.executable, str(Path(__file__).resolve()), "--edition", args.edition, "--worker",
-                   str(project), str(cache)]
+                   str(project), str(cache), "--memory-scope", unit, "--memory-limit", str(maximum)]
         if args.container != "host" and (args.container != "auto" or not java25() or
                                          missing_build_tools()):
           if not shutil.which("distrobox"):
@@ -426,8 +503,16 @@ def main():
           default_container = (container_file.read_text().strip() if container_file.is_file()
                                else os.environ.get("TGX_BUILD_CONTAINER", "client-dev"))
           name = default_container if args.container == "auto" else args.container
-          command = ["distrobox", "enter", name, "--", "python3", *command[1:]]
-        status = execute(command, cwd=project, stdout=captured, stderr=subprocess.STDOUT)
+          # Enter the memory scope inside the container, around the actual worker.
+          command = ["distrobox", "enter", name, "--",
+                     *memory_scope_command(["python3", *command[1:]], unit, maximum)]
+        else:
+          command = memory_scope_command(command, unit, maximum)
+        try:
+          status = execute(command, cwd=project, stdout=captured, stderr=subprocess.STDOUT)
+        finally:
+          # Process groups alone miss workers that create their own sessions.
+          stop_memory_scope(unit)
         if status:
           raise BuildError(f"Release build failed (exit {status}).")
       apk = Path(json.loads((cache / "result.json").read_text())["apk"])

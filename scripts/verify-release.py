@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -90,12 +91,17 @@ def local_signing_config(root, edition="personal"):
   environment = os.environ.copy()
   environment["CLIENT_KEYSTORE_PASSWORD"] = signing["keystore.password"]
   try:
-    certificate = subprocess.run(
-      ["keytool", "-exportcert", "-keystore", str(keystore), "-alias", signing["key.alias"],
-       "-storepass:env", "CLIENT_KEYSTORE_PASSWORD"],
-      cwd=root, env=environment, capture_output=True, check=True,
-    ).stdout
-  except subprocess.CalledProcessError:
+    with tempfile.TemporaryDirectory(prefix="client-signing-") as directory:
+      exported = Path(directory) / "certificate.der"
+      # JVM diagnostics can appear on stdout before the binary certificate,
+      # especially when a container process enters a host memory scope.
+      subprocess.run(
+        ["keytool", "-exportcert", "-keystore", str(keystore), "-alias", signing["key.alias"],
+         "-storepass:env", "CLIENT_KEYSTORE_PASSWORD", "-file", str(exported)],
+        cwd=root, env=environment, capture_output=True, check=True,
+      )
+      certificate = exported.read_bytes()
+  except (subprocess.CalledProcessError, OSError):
     raise ValueError(
       "Cannot read release signing certificate; check signing configuration"
     ) from None

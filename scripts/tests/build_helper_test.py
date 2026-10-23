@@ -7,9 +7,12 @@ import io
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import shutil
+import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -233,6 +236,108 @@ class ProcessCleanupTest(unittest.TestCase):
       if process.poll() is None:
         process.kill()
       original_wait()
+
+
+class BuildMemoryTest(unittest.TestCase):
+  def test_memory_budget_reserves_ram_and_caps_the_whole_build(self):
+    for total, available, expected in ((32, 24, 12), (16, 14, 8), (32, 16, 8)):
+      memory = f"MemTotal: {total * 1024 ** 2} kB\nMemAvailable: {available * 1024 ** 2} kB\n"
+      with self.subTest(total=total, available=available), \
+           patch.object(BUILD.Path, "read_text", return_value=memory):
+        self.assertEqual(BUILD.memory_limit(), expected * BUILD.GIB)
+
+  def test_busy_and_small_hosts_are_rejected_before_compilation(self):
+    for total, available in ((32, 13), (8, 8)):
+      memory = f"MemTotal: {total * 1024 ** 2} kB\nMemAvailable: {available * 1024 ** 2} kB\n"
+      with self.subTest(total=total, available=available), \
+           patch.object(BUILD.Path, "read_text", return_value=memory), \
+           self.assertRaisesRegex(BUILD.BuildError, "Not enough available RAM"):
+        BUILD.memory_limit()
+
+  def test_missing_memory_information_does_not_allow_an_unbounded_build(self):
+    with patch.object(BUILD.Path, "read_text", return_value="MemTotal: 123 kB\n"), \
+         self.assertRaisesRegex(BUILD.BuildError, "Cannot determine available RAM"):
+      BUILD.memory_limit()
+
+  def test_worker_rejects_missing_limits_and_unenforced_kernel_settings(self):
+    with self.assertRaisesRegex(BUILD.BuildError, "memory-limited systemd scope"):
+      BUILD.verify_memory_scope(None, None)
+    with tempfile.TemporaryDirectory() as directory:
+      root = Path(directory)
+      unit, maximum = "test-apk.scope", 64 * 1024 ** 2
+      group = root / "app.slice" / unit
+      group.mkdir(parents=True)
+      settings = {"cgroup.procs": str(os.getpid()), "memory.max": maximum,
+                  "memory.high": 53 * 1024 ** 2, "memory.swap.max": 0, "memory.oom.group": 1}
+      for name, value in settings.items():
+        (group / name).write_text(str(value))
+      with patch.object(BUILD, "CGROUP_ROOTS", (root / "private-namespace", root)), \
+           patch.object(BUILD, "run", return_value=f"/app.slice/{unit}\n".encode()):
+        BUILD.verify_memory_scope(unit, maximum)
+        for name in settings:
+          with self.subTest(setting=name):
+            (group / name).write_text("max" if name.startswith("memory.") else "0")
+            with self.assertRaisesRegex(BUILD.BuildError, "refusing to start Gradle"):
+              BUILD.verify_memory_scope(unit, maximum)
+            (group / name).write_text(str(settings[name]))
+
+
+class MemoryScopeIntegrationTest(unittest.TestCase):
+  @classmethod
+  def setUpClass(cls):
+    if not all(shutil.which(tool) for tool in ("systemd-run", "systemctl")):
+      raise unittest.SkipTest("systemd is unavailable")
+    session = subprocess.run(["systemctl", "--user", "show", "-p", "Version", "--value"],
+                             capture_output=True, timeout=5)
+    if session.returncode:
+      raise unittest.SkipTest("No systemd user session")
+
+  def setUp(self):
+    self.unit = f"client-apk-test-{os.getpid()}-{time.monotonic_ns()}.scope"
+    self.maximum = 64 * 1024 ** 2
+    self.directory = tempfile.TemporaryDirectory()
+    self.addCleanup(self.directory.cleanup)
+    self.addCleanup(BUILD.stop_memory_scope, self.unit)
+    self.root = Path(self.directory.name)
+
+  def script(self, body):
+    helper = str(SCRIPTS / "build-apk.py")
+    return ("import importlib.util, os, subprocess, sys, time\nfrom pathlib import Path\n"
+            f"spec = importlib.util.spec_from_file_location('build_apk', {helper!r})\n"
+            "build = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(build)\n"
+            f"build.verify_memory_scope({self.unit!r}, {self.maximum})\n" + body)
+
+  def test_limit_kills_only_the_dummy_build(self):
+    # Verify the actual cgroup first, then exceed a tiny limit, never host RAM.
+    verified = self.root / "verified"
+    script = self.script(
+      f"Path({str(verified)!r}).touch()\n"
+      # Bypass soft throttling so this test reaches the hard cap promptly.
+      f"subprocess.run(['systemctl', '--user', 'set-property', '--runtime', {self.unit!r}, "
+      "'MemoryHigh=infinity'], check=True)\nbytearray(128 * 1024 ** 2)\n")
+    result = subprocess.run(BUILD.memory_scope_command([sys.executable, "-c", script],
+                                                      self.unit, self.maximum),
+                            capture_output=True, text=True, timeout=15)
+    self.assertTrue(verified.exists(), result.stderr)
+    self.assertIn(result.returncode, (-signal.SIGKILL, 128 + signal.SIGKILL))
+
+  def test_cleanup_stops_workers_that_create_another_session(self):
+    pid_file = self.root / "worker.pid"
+    child = ("from pathlib import Path\nimport os, time\n"
+             f"Path({str(pid_file)!r}).write_text(str(os.getpid()))\ntime.sleep(60)\n")
+    script = self.script(
+      f"subprocess.Popen([sys.executable, '-c', {child!r}], start_new_session=True, "
+      "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+      f"while not Path({str(pid_file)!r}).exists(): time.sleep(0.01)\n")
+    result = subprocess.run(BUILD.memory_scope_command([sys.executable, "-c", script],
+                                                      self.unit, self.maximum),
+                            capture_output=True, text=True, timeout=15)
+    self.assertEqual(result.returncode, 0, result.stderr)
+    pid = int(pid_file.read_text())
+    BUILD.stop_memory_scope(self.unit)
+    state = Path(f"/proc/{pid}/stat")
+    self.assertTrue(not state.exists() or state.read_text().split()[2] == "Z",
+                    f"Worker {pid} survived scope cleanup")
 
 
 class BuildCacheTest(unittest.TestCase):
