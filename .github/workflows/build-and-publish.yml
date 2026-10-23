@@ -261,14 +261,21 @@ jobs:
           path: ${{ steps.find_apk.outputs.apk_path }}
           retention-days: 1
       
+      - name: Compress release mapping
+        if: matrix.build_type == 'Release'
+        run: |
+          gzip -9 -c app/build/outputs/mapping/publicLatestArm64Release/mapping.txt \
+            > mapping-${{ matrix.flavor }}-${{ matrix.build_type }}.txt.gz
+
       - name: Upload mapping file
         if: matrix.build_type == 'Release'
         uses: actions/upload-artifact@v5
         with:
           name: mapping-${{ matrix.flavor }}-${{ matrix.build_type }}
-          path: app/build/outputs/mapping/publicLatestArm64Release/*.txt
-          retention-days: 90
-          if-no-files-found: ignore
+          path: mapping-${{ matrix.flavor }}-${{ matrix.build_type }}.txt.gz
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
 
   publish:
     name: Publish to Telegram
@@ -415,27 +422,30 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release_info.outputs.tag_name }}
-          files: artifacts/apk-*-Release/*.apk
+          files: |
+            artifacts/apk-*-Release/*.apk
+            artifacts/mapping-*-Release/*.txt.gz
+          fail_on_unmatched_files: true
           generate_release_notes: true
           draft: false
           prerelease: ${{ steps.release_info.outputs.prerelease }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  cleanup_apk_artifacts:
-    name: Remove temporary APK artifacts
+  cleanup_build_artifacts:
+    name: Remove temporary build artifacts
     needs: [build, publish, create_release]
     runs-on: ubuntu-latest
     if: ${{ always() && needs.build.result == 'success' && needs.create_release.result == 'success' }}
     permissions:
       actions: write
     steps:
-      - name: Remove APK copied to the release
+      - name: Remove APK and mapping copied to the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
-            --jq '.artifacts[] | select(.name | startswith("apk-")) | .id' |
+            --jq '.artifacts[] | select(.name | startswith("apk-") or startswith("mapping-")) | .id' |
             while read -r artifact_id; do
               gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id"
             done
