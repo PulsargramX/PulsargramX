@@ -309,7 +309,8 @@ public final class RichMessageLayout implements MessageTextSelectionSurface {
     int save = Views.save(canvas);
     canvas.clipRect(x, y, x + measuredWidth, y + contentBottom);
     for (BlockNode node : nodes) {
-      if (!node.visible) {
+      if (!isExposed(node)) {
+        node.viewport.setEmpty();
         continue;
       }
       if (streamingAnimator != null && !streamingAnimator.isVisible(node.streamingKey())) {
