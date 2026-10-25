@@ -94,6 +94,8 @@ public class MediaWrapper implements FileProgressComponent.SimpleListener, FileP
   }
 
   private int lastLeft, lastTop, lastRadius;
+  private final RectF pathRect = new RectF();
+  private int pathRoundings;
   protected int cellRight;
   protected int cellBottom;
 
@@ -870,10 +872,7 @@ public class MediaWrapper implements FileProgressComponent.SimpleListener, FileP
     if (needBottomRight) {
       roundings |= ROUND_BOTTOM_RIGHT;
     }
-    if (this.roundings != roundings) {
-      this.roundings = roundings;
-      layoutPath(lastLeft, lastTop, lastRadius);
-    }
+    this.roundings = roundings;
   }
 
   private boolean useBubbles () {
@@ -881,24 +880,19 @@ public class MediaWrapper implements FileProgressComponent.SimpleListener, FileP
   }
 
   private void layoutPath (int startX, int startY, int radius) {
-    cellRight = startX + cellWidth;
-    cellBottom = startY + cellHeight;
-
-    lastLeft = startX;
-    lastTop = startY;
-
     lastRadius = radius;
+    pathRoundings = roundings;
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT && path != null) {
       path.reset();
-      RectF rectF = Paints.getRectF();
-      rectF.set(lastLeft, lastTop, cellRight, cellBottom);
+      // Other messages can update shared drawing helpers during background layout.
+      pathRect.set(startX, startY, startX + cellWidth, startY + cellHeight);
       int halfRadius = radius / 2;
-      DrawAlgorithms.buildPath(path, rectF,
-        (roundings & ROUND_TOP_LEFT) != 0 ? halfRadius : 0,
-        (roundings & ROUND_TOP_RIGHT) != 0 ? halfRadius : 0,
-        (roundings & ROUND_BOTTOM_RIGHT) != 0 ? halfRadius : 0,
-        (roundings & ROUND_BOTTOM_LEFT) != 0 ? halfRadius : 0
+      DrawAlgorithms.buildPath(path, pathRect,
+        (pathRoundings & ROUND_TOP_LEFT) != 0 ? halfRadius : 0,
+        (pathRoundings & ROUND_TOP_RIGHT) != 0 ? halfRadius : 0,
+        (pathRoundings & ROUND_BOTTOM_RIGHT) != 0 ? halfRadius : 0,
+        (pathRoundings & ROUND_BOTTOM_LEFT) != 0 ? halfRadius : 0
       );
     }
   }
@@ -952,7 +946,6 @@ public class MediaWrapper implements FileProgressComponent.SimpleListener, FileP
     if (widthChanged || this.cellHeight != height) {
       this.cellWidth = width;
       this.cellHeight = height;
-      this.lastLeft = this.lastTop = -1;
       if (widthChanged && !StringUtils.isEmpty(duration)) {
         if (!(isVideo() && !getFileProgress().isLoaded() && getFileProgress().isVideoStreaming())) {
           trimDuration();
@@ -974,11 +967,18 @@ public class MediaWrapper implements FileProgressComponent.SimpleListener, FileP
 
   public <T extends View & DrawableProvider> void draw (T view, Canvas c, int startX, int startY, Receiver preview, Receiver receiver, float alpha) {
     final float selectionFactor = selectionAnimator != null && source != null ? source.getSelectionFactor(selectionAnimator) : 0f;
+    int cellLeft = lastLeft = startX;
+    int cellTop = lastTop = startY;
+    int cellRight = this.cellRight = cellLeft + cellWidth;
+    int cellBottom = this.cellBottom = cellTop + cellHeight;
+
     final boolean clipped = Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT && path != null && !(source != null && source.useFullWidth());
     final int saveCount;
     if (clipped) {
       int radius = getRadius();
-      if (lastLeft != startX || lastTop != startY || lastRadius != radius) {
+      if (pathRect.left != cellLeft || pathRect.top != cellTop ||
+          pathRect.right != cellRight || pathRect.bottom != cellBottom ||
+          lastRadius != radius || pathRoundings != roundings) {
         layoutPath(startX, startY, radius);
       }
       saveCount = ViewSupport.clipPath(c, path);
@@ -987,12 +987,6 @@ public class MediaWrapper implements FileProgressComponent.SimpleListener, FileP
     }
 
     int selectionPadding = (int) ((float) Screen.dp(12f) * selectionFactor);
-
-    int cellLeft = lastLeft = startX;
-    int cellTop = lastTop = startY;
-
-    int cellRight = cellLeft + cellWidth;
-    int cellBottom = cellTop + cellHeight;
 
     int selectionColor = selectionFactor > 0f ? Theme.chatSelectionColor() : 0;
     int overlayColor = selectionFactor > 0f ? ColorUtils.alphaColor(selectionFactor < .5f ? selectionFactor / .5f : 1f, ColorUtils.compositeColor(source != null ? source.getContentBackgroundColor() : Theme.fillingColor(), selectionColor)) : 0;
