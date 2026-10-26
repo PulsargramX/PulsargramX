@@ -245,7 +245,7 @@ public class TGMessageMedia extends TGMessage {
 
   private void updateRounds () {
     if (useBubbles()) {
-      mosaicWrapper.setNeedDefaultRounds(needTopContentRounding(), needBottomContentRounding());
+      mosaicWrapper.setNeedDefaultRounds(needTopContentRounding() || isCaptionAboveMedia(), needBottomContentRounding());
     }
   }
 
@@ -260,6 +260,7 @@ public class TGMessageMedia extends TGMessage {
     TdApi.FormattedText caption = null;
     long captionMessageId = 0;
     boolean hasEditedText = false;
+    boolean showCaptionAboveMedia = false;
     synchronized (this) {
       ArrayList<TdApi.Message> combinedMessages = getCombinedMessagesUnsafely();
       if (combinedMessages != null && !combinedMessages.isEmpty()) {
@@ -272,6 +273,7 @@ public class TGMessageMedia extends TGMessage {
             caption = Td.textOrCaption(captionMessage.content);
           }
           captionMessageId = captionMessage.id;
+          showCaptionAboveMedia = tdlib.getMessageShowCaptionAboveMedia(captionMessage);
         }
       } else {
         caption = tdlib.getPendingFormattedText(msg.chatId, msg.id);
@@ -281,11 +283,18 @@ public class TGMessageMedia extends TGMessage {
           caption = Td.textOrCaption(msg.content);
         }
         captionMessageId = msg.id;
+        showCaptionAboveMedia = tdlib.getMessageShowCaptionAboveMedia(msg);
       }
     }
 
     this.hasEditedText = hasEditedText;
-    return setCaption(caption, captionMessageId, force);
+    boolean positionChanged = this.showCaptionAboveMedia != showCaptionAboveMedia;
+    this.showCaptionAboveMedia = showCaptionAboveMedia;
+    boolean captionChanged = setCaption(caption, captionMessageId, force);
+    if (positionChanged) {
+      updateRounds();
+    }
+    return captionChanged || positionChanged;
   }
 
   private void checkHasEditedMedia () {
@@ -314,7 +323,7 @@ public class TGMessageMedia extends TGMessage {
 
   @Override
   protected int getFooterPaddingTop () {
-    return Td.isEmpty(caption) ? Screen.dp(8f) : -Screen.dp(2f);
+    return Td.isEmpty(caption) || isCaptionAboveMedia() ? Screen.dp(8f) : -Screen.dp(2f);
   }
 
   @Override
@@ -326,6 +335,23 @@ public class TGMessageMedia extends TGMessage {
 
   private TdApi.FormattedText caption;
   private long captionMessageId;
+  private boolean showCaptionAboveMedia;
+
+  private boolean isCaptionAboveMedia () {
+    return showCaptionAboveMedia && wrapper != null;
+  }
+
+  private int getCaptionTopPadding () {
+    return useBubbles() && !useForward() ? Screen.dp(TEXT_MARGIN) - getBubbleContentPadding() : 0;
+  }
+
+  private int getMediaTopOffset () {
+    return isCaptionAboveMedia() ? getCaptionTopPadding() + wrapper.getHeight() + Screen.dp(TEXT_MARGIN) : 0;
+  }
+
+  private int getCaptionTopOffset () {
+    return isCaptionAboveMedia() ? getCaptionTopPadding() : mosaicWrapper.getHeight() + Screen.dp(TEXT_MARGIN);
+  }
 
   public long getCaptionMessageId () {
     return captionMessageId;
@@ -556,6 +582,8 @@ public class TGMessageMedia extends TGMessage {
 
   @Override
   protected void onMessageCombinationRemoved (TdApi.Message message, int index) {
+    boolean captionChanged = checkCommonCaption();
+    checkHasEditedMedia();
     boolean useFullWidth = useFullWidth();
     switch (mosaicWrapper.removeItem(message.id, index)) {
       case MosaicWrapper.MOSAIC_CHANGED: {
@@ -563,7 +591,7 @@ public class TGMessageMedia extends TGMessage {
         break;
       }
       case MosaicWrapper.MOSAIC_INVALIDATED: {
-        if (useFullWidth() != useFullWidth) {
+        if (captionChanged || useFullWidth() != useFullWidth) {
           rebuildAndUpdateContent();
         }
         invalidate();
@@ -584,7 +612,7 @@ public class TGMessageMedia extends TGMessage {
 
   @Override
   protected int getBottomLineContentWidth () {
-    return wrapper != null && Lang.rtl() == wrapper.getLastLineIsRtl() ? wrapper.getLastLineWidth() + (xBubblePaddingSmall + xBubblePadding) * 2 : BOTTOM_LINE_EXPAND_HEIGHT;
+    return !isCaptionAboveMedia() && wrapper != null && Lang.rtl() == wrapper.getLastLineIsRtl() ? wrapper.getLastLineWidth() + (xBubblePaddingSmall + xBubblePadding) * 2 : BOTTOM_LINE_EXPAND_HEIGHT;
   }
 
   /*@Override
@@ -594,7 +622,7 @@ public class TGMessageMedia extends TGMessage {
 
   @Override
   protected boolean drawBubbleTimeOverContent () {
-    return wrapper == null && !hasFooter();
+    return (wrapper == null || isCaptionAboveMedia()) && !hasFooter();
   }
 
   @Override
@@ -606,7 +634,8 @@ public class TGMessageMedia extends TGMessage {
   protected void drawContent (MessageView view, Canvas c, int startX, int startY, int maxWidth, ComplexReceiver complexReceiver) {
     final boolean clipped = useBubbles() && !useForward();
     final int saveCount = clipped ? ViewSupport.clipPath(c, getBubbleClipPath()) : Integer.MIN_VALUE;
-    mosaicWrapper.draw(view, c, startX, startY, complexReceiver, useFullWidth());
+    final int mediaTop = startY + getMediaTopOffset();
+    mosaicWrapper.draw(view, c, startX, mediaTop, complexReceiver, useFullWidth());
     if (clipped) {
       ViewSupport.restoreClipPath(c, saveCount);
     }
@@ -631,7 +660,7 @@ public class TGMessageMedia extends TGMessage {
         }
         pTimerLeft = pTimerRight - timerWidth - Screen.dp(4f);
       }
-      int pTimerTop = startY + mediaWrapper.getCellHeight() - Screen.dp(4f) - Screen.dp(20f) - Screen.dp(4f);
+      int pTimerTop = mediaTop + mediaWrapper.getCellHeight() - Screen.dp(4f) - Screen.dp(20f) - Screen.dp(4f);
       if (useBubbles()) {
         pTimerTop -= offset;
       }
@@ -654,7 +683,7 @@ public class TGMessageMedia extends TGMessage {
 
     if (wrapper != null) {
       float alpha = getTranslationLoadingAlphaValue();
-      wrapper.draw(c, getTextX(view, wrapper, false), getTextX(view, wrapper, true), Config.MOVE_BUBBLE_TIME_RTL_TO_LEFT ? 0 : getBubbleTimePartWidth(), startY + mosaicWrapper.getHeight() + Screen.dp(TEXT_MARGIN), null, alpha, view.getTextMediaReceiver());
+      wrapper.draw(c, getTextX(view, wrapper, false), getTextX(view, wrapper, true), isCaptionAboveMedia() || Config.MOVE_BUBBLE_TIME_RTL_TO_LEFT ? 0 : getBubbleTimePartWidth(), startY + getCaptionTopOffset(), null, alpha, view.getTextMediaReceiver());
     }
   }
 
@@ -700,7 +729,7 @@ public class TGMessageMedia extends TGMessage {
     }
 
     int cellLeft = getContentX();
-    int cellTop = getContentY();
+    int cellTop = getContentY() + getMediaTopOffset();
     int cellRight = cellLeft + mediaWrapper.getCellWidth();
     int cellBottom = cellTop + mediaWrapper.getCellHeight();
 
@@ -834,7 +863,7 @@ public class TGMessageMedia extends TGMessage {
     int mosaicHeight = mosaicWrapper != null ? mosaicWrapper.getHeight() : 0;
     return wrapper == null ?
       mosaicHeight :
-      mosaicHeight + wrapper.getHeight() + Screen.dp(TEXT_MARGIN) + (useBubbles() && !useForward() ? Screen.dp(TEXT_MARGIN) - getBubbleContentPadding() : 0);
+      mosaicHeight + wrapper.getHeight() + Screen.dp(TEXT_MARGIN) + getCaptionTopPadding();
   }
 
   // Touch
@@ -889,7 +918,7 @@ public class TGMessageMedia extends TGMessage {
     }
 
     int cellLeft = getContentX();
-    int cellTop = getContentY();
+    int cellTop = getContentY() + getMediaTopOffset();
     int cellRight = cellLeft + mosaicWrapper.getWidth();
     int cellBottom = cellTop + mosaicWrapper.getHeight();
 
@@ -948,7 +977,7 @@ public class TGMessageMedia extends TGMessage {
       return false;
     }
     int cellLeft = getContentX();
-    int cellTop = getContentY();
+    int cellTop = getContentY() + getMediaTopOffset();
     int cellRight = cellLeft + mosaicWrapper.getWidth();
     int cellBottom = cellTop + mosaicWrapper.getHeight();
 

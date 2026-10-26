@@ -512,6 +512,57 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     return false;
   }
 
+  private boolean canMoveCaption () {
+    return mode == MODE_GALLERY && !inProfilePhotoEditMode() && sendDelegate != null &&
+      sendDelegate.allowShowCaptionAboveMedia() && getArgumentsStrict().receiverChatId != 0 &&
+      !ChatId.isSecret(getArgumentsStrict().receiverChatId) &&
+      stack.getCurrent().getSourceGalleryFile() != null;
+  }
+
+  private boolean hasSelectionCaption () {
+    if (hasCaption()) {
+      return true;
+    }
+    ArrayList<ImageFile> selected = selectDelegate != null ? selectDelegate.getSelectedMediaItems(false) : null;
+    if (selected != null) {
+      for (ImageFile file : selected) {
+        if (file instanceof ImageGalleryFile && !Td.isEmpty(((ImageGalleryFile) file).getCaption(false, false))) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private void toggleCaptionPosition () {
+    if (canMoveCaption()) {
+      sendDelegate.onShowCaptionAboveMediaStateChanged(!sendDelegate.showCaptionAboveMedia());
+      updateCaptionLayout();
+      checkCaptionButtonsY();
+    }
+  }
+
+  private boolean isCaptionAboveMediaForSending () {
+    return canMoveCaption() && sendDelegate.showCaptionAboveMedia();
+  }
+
+  private void updateCaptionPositionButton () {
+    if (captionPositionButton != null) {
+      boolean available = canMoveCaption() && hasSelectionCaption();
+      captionPositionButton.setVisibility(available ? View.VISIBLE : View.GONE);
+      boolean above = sendDelegate != null && sendDelegate.showCaptionAboveMedia();
+      captionPositionButton.setImageResource(above ? R.drawable.baseline_arrow_downward_24 : R.drawable.baseline_arrow_upward_24);
+      captionPositionButton.setContentDescription(Lang.getString(above ? R.string.CaptionBelow : R.string.CaptionAbove));
+      Views.setRightMargin(captionPositionButton, inCaption ? Screen.dp(55f) : 0);
+      if (inputView != null) {
+        int rightPadding = Screen.dp(available && inCaption ? 110f : 55f);
+        if (inputView.getPaddingRight() != rightPadding) {
+          inputView.setPadding(inputView.getPaddingLeft(), inputView.getPaddingTop(), rightPadding, inputView.getPaddingBottom());
+        }
+      }
+    }
+  }
+
   private void setBottomAlpha (float alpha) {
     float visibility = alpha * headerVisible.getFloatValue() * (1f - pipFactor);
     if (hasCaption() || mode == MODE_GALLERY) {
@@ -806,10 +857,24 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   // Other
 
   private void checkCaptionButtonsY () {
-    final float offset = keyboardFrameLayout != null && keyboardFrameLayout.getVisibility() == View.VISIBLE && keyboardFrameLayout.getParent() != null ? keyboardFrameLayout.getMeasuredHeight() : 0;
-    captionEmojiButton.setTranslationY(-offset);
-    captionDoneButton.setTranslationY(-offset);
-    captionWrapView.setTranslationY(-offset);
+    final boolean above = isCaptionAboveMediaForSending();
+    final float offset = !above && keyboardFrameLayout != null && keyboardFrameLayout.getVisibility() == View.VISIBLE && keyboardFrameLayout.getParent() != null ? keyboardFrameLayout.getMeasuredHeight() : 0;
+    final int topMargin = above ? (headerView != null ? headerView.getMeasuredHeight() : Size.getHeaderPortraitSize()) : 0;
+    for (View captionControl : new View[] {captionWrapView, captionEmojiButton, captionDoneButton}) {
+      FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) captionControl.getLayoutParams();
+      int gravity = (params.gravity & ~Gravity.VERTICAL_GRAVITY_MASK) | (above ? Gravity.TOP : Gravity.BOTTOM);
+      if (params.gravity != gravity || params.topMargin != topMargin) {
+        params.gravity = gravity;
+        params.topMargin = topMargin;
+        captionControl.setLayoutParams(params);
+      }
+    }
+    // Keep a top caption fixed while its parent follows the keyboard animation.
+    final float translationY = above && bottomWrap != null ? -bottomWrap.getTranslationY() : -offset;
+    captionEmojiButton.setTranslationY(translationY);
+    captionDoneButton.setTranslationY(translationY);
+    captionWrapView.setTranslationY(translationY);
+    updateCaptionPositionButton();
     if (inlineResultsView != null) {
       inlineResultsView.updatePosition(true);
     }
@@ -838,6 +903,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       }
 
       updateCaptionLayout();
+      checkCaptionButtonsY();
       captionEmojiButton.setEnabled(inCaption);
       captionDoneButton.setEnabled(inCaption);
       mediaView.setDisableTouch(inCaption);
@@ -3218,7 +3284,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   private ViewGroup captionWrapView;
   private View captionView;
   private InputView inputView;
-  private ImageView captionEmojiButton, captionDoneButton;
+  private ImageView captionEmojiButton, captionDoneButton, captionPositionButton;
   private @Nullable VideoControlView videoSliderView;
 
   private SecretTimerView secretView;
@@ -3404,6 +3470,12 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   private boolean needVideoMargin;
 
   private void updateCaptionLayout () {
+    if (isCaptionAboveMediaForSending()) {
+      needVideoMargin = false;
+      Views.setBottomMargin(captionWrapView, 0);
+      checkCaptionButtonsY();
+      return;
+    }
     boolean needMargin = videoFactor == 1f && !inCaption;
     if (this.needVideoMargin != needMargin) {
       this.needVideoMargin = needMargin;
@@ -3417,7 +3489,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     float thumbOffset = thumbsFactor * Screen.dp(THUMBS_PADDING);
     if (captionWrapView != null) {
       updateCaptionLayout();
-      if (!needVideoMargin) {
+      if (!needVideoMargin && !isCaptionAboveMediaForSending()) {
         float y = (float) -Screen.dp(56f) * videoFactor + thumbOffset;
         captionWrapView.setTranslationY(y);
       }
@@ -3614,6 +3686,9 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     if (bottomWrap != null) {
       float y = offsetDistance - (thumbsFactor * (float) thumbsDistance) * (1f - dismissFactor);
       bottomWrap.setTranslationY(y);
+      if (captionDoneButton != null && captionWrapView != null && isCaptionAboveMediaForSending()) {
+        checkCaptionButtonsY();
+      }
       maxY = Math.max(0, y);
     }
     if (thumbsRecyclerView != null) {
@@ -9062,6 +9137,16 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
     if (chat != null && !hasFlag(Args.FLAG_DISALLOW_SEND_BUTTON_HAPTIC_MENU)) {
       tdlib.ui().createSimpleHapticMenu(this, chat.id, () -> currentActiveButton == 0, this::canDisableMarkdown, () -> true, hapticItems -> {
+        if (canMoveCaption() && hasSelectionCaption()) {
+          boolean above = sendDelegate.showCaptionAboveMedia();
+          hapticItems.add(0, new HapticMenuHelper.MenuItem(R.id.btn_captionPosition,
+            Lang.getString(above ? R.string.CaptionBelow : R.string.CaptionAbove),
+            above ? R.drawable.baseline_arrow_downward_24 : R.drawable.baseline_arrow_upward_24)
+            .setOnClickListener((view, parentView, item) -> {
+              toggleCaptionPosition();
+              return true;
+            }));
+        }
         if (sendDelegate != null && sendDelegate.allowHideMedia()) {
           hapticItems.add(0,
             new HapticMenuHelper.MenuItem(R.id.btn_spoiler, Lang.getString(R.string.HideMedia), R.drawable.deproko_baseline_whatshot_24)
@@ -9265,6 +9350,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
         } else {
           stack.getCurrent().setCaption(captionView.getOutputText(false));
         }
+        updateCaptionPositionButton();
       }
 
       @Override
@@ -9288,11 +9374,23 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     captionView.setHintTextColor(0xbaffffff);
     captionView.setTextColor(0xffffffff);
     captionView.setTypeface(Fonts.getRobotoRegular());
-    captionView.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+    captionView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
     captionView.setInputType(captionView.getInputType() | EditorInfo.TYPE_TEXT_FLAG_CAP_SENTENCES | EditorInfo.TYPE_TEXT_FLAG_MULTI_LINE);
     captionView.setSelectionChangeListener(this);
     this.captionView = captionView;
     this.inputView = captionView;
+
+    captionPositionButton = new ImageView(context);
+    captionPositionButton.setScaleType(ImageView.ScaleType.CENTER);
+    captionPositionButton.setColorFilter(0xffffffff);
+    captionPositionButton.setBackgroundResource(R.drawable.bg_btn_header_light);
+    captionPositionButton.setId(R.id.btn_captionPosition);
+    captionPositionButton.setOnClickListener(v -> toggleCaptionPosition());
+    captionPositionButton.setLayoutParams(FrameLayoutFix.newParams(Screen.dp(55f), Screen.dp(52f), Gravity.RIGHT | Gravity.CENTER_VERTICAL));
+    FrameLayoutFix captionInputWrap = new FrameLayoutFix(context);
+    captionInputWrap.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+    captionInputWrap.addView(captionView);
+    captionInputWrap.addView(captionPositionButton);
 
     captionDoneButton = new ImageView(context);
     captionDoneButton.setId(R.id.btn_caption_done);
@@ -9339,7 +9437,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     };
     captionWrapView.setOrientation(LinearLayout.VERTICAL);
     captionWrapView.setBackgroundColor(Theme.getColor(ColorId.transparentEditor));
-    captionWrapView.addView(captionView);
+    captionWrapView.addView(captionInputWrap);
     captionWrapView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
     this.captionWrapView = captionWrapView;
 
@@ -9423,6 +9521,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
     contentView.addView(bottomWrap);
     attachedViews.add(bottomWrap);
+    checkCaptionButtonsY();
 
     // Image overlay
 

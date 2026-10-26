@@ -1382,6 +1382,8 @@
 
   <string name="Caption">Сaption</string>
   <string name="AddCaption">Add a caption…</string>
+  <string name="CaptionAbove">Move Caption Up</string>
+  <string name="CaptionBelow">Move Caption Down</string>
   <string name="Enhance">Enhance</string>
   <string name="Exposure">Exposure</string>
   <string name="Contrast">Contrast</string>

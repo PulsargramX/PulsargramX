@@ -494,6 +494,26 @@ public class MediaBottomGalleryController extends MediaBottomBaseController<Medi
 
   @Override
   protected void addCustomItems (View view, @NonNull List<HapticMenuHelper.MenuItem> hapticItems) {
+    List<ImageFile> selectedFiles = adapter.getSelectedPhotosAndVideosAsList(false);
+    if (!showingFoundImages && allowShowCaptionAboveMedia() && selectedFiles != null) {
+      boolean hasCaption = false;
+      for (ImageFile file : selectedFiles) {
+        if (file instanceof ImageGalleryFile && !Td.isEmpty(((ImageGalleryFile) file).getCaption(false, false))) {
+          hasCaption = true;
+          break;
+        }
+      }
+      if (hasCaption) {
+        boolean above = showCaptionAboveMedia();
+        hapticItems.add(new HapticMenuHelper.MenuItem(R.id.btn_captionPosition,
+          Lang.getString(above ? R.string.CaptionBelow : R.string.CaptionAbove),
+          above ? R.drawable.baseline_arrow_downward_24 : R.drawable.baseline_arrow_upward_24)
+          .setOnClickListener((itemView, parentView, item) -> {
+            onShowCaptionAboveMediaStateChanged(!showCaptionAboveMedia());
+            return true;
+          }));
+      }
+    }
     if (canSendAsFile()) {
       List<ImageFile> files = adapter.getSelectedPhotosAndVideosAsList(false);
       boolean allVideo = files != null;
@@ -550,6 +570,7 @@ public class MediaBottomGalleryController extends MediaBottomBaseController<Medi
   @Override
   public boolean sendSelectedItems (View view, ArrayList<ImageFile> images, TdApi.MessageSendOptions options, boolean disableMarkdown, boolean asFiles, boolean showCaptionAboveMedia, boolean hasSpoiler) {
     // TODO delete other
+    mediaLayout.setShowCaptionAboveMedia(showCaptionAboveMedia);
     return mediaLayout.sendPhotosOrVideos(view, images, false, options, disableMarkdown, asFiles, true);
   }
 

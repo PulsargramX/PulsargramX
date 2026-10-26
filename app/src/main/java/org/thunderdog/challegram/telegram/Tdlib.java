@@ -5628,7 +5628,7 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
   }
 
   private final HashMap<String, TdApi.MessageContent> pendingMessageTexts = new HashMap<>();
-  private final HashMap<String, TdApi.FormattedText> pendingMessageCaptions = new HashMap<>();
+  private final HashMap<String, TdApi.EditMessageCaption> pendingMessageCaptions = new HashMap<>();
 
   public boolean canEditMedia (MessageWithProperties message, boolean photoVideoOnly) {
     if (message != null) {
@@ -5706,7 +5706,8 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
 
   public void editMessageCaption (long chatId, long messageId, TdApi.FormattedText caption, boolean showCaptionAboveMedia) {
     TD.parseEntities(caption);
-    performEdit(chatId, messageId, caption, new TdApi.EditMessageCaption(chatId, messageId, null, caption, showCaptionAboveMedia), pendingMessageCaptions);
+    TdApi.EditMessageCaption edit = new TdApi.EditMessageCaption(chatId, messageId, null, caption, showCaptionAboveMedia);
+    performEdit(chatId, messageId, edit, edit, pendingMessageCaptions);
   }
 
   public boolean cancelEditMessageMedia (long chatId, long messageId) {
@@ -5764,8 +5765,23 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
     }
 
     synchronized (pendingMessageCaptions) {
-      return pendingMessageCaptions.get(chatId + "_" + messageId);
+      TdApi.EditMessageCaption pendingCaption = pendingMessageCaptions.get(chatId + "_" + messageId);
+      return pendingCaption != null ? pendingCaption.caption : null;
     }
+  }
+
+  public boolean getMessageShowCaptionAboveMedia (TdApi.Message message) {
+    MessageEditMediaPending pendingMedia = getPendingMessageMedia(message.chatId, message.id);
+    if (pendingMedia != null) {
+      return pendingMedia.showCaptionAboveMedia();
+    }
+    synchronized (pendingMessageCaptions) {
+      TdApi.EditMessageCaption pendingCaption = pendingMessageCaptions.get(message.chatId + "_" + message.id);
+      if (pendingCaption != null) {
+        return pendingCaption.showCaptionAboveMedia;
+      }
+    }
+    return Td.showCaptionAboveMedia(message.content);
   }
 
   public MessageEditMediaPending getPendingMessageMedia (long chatId, long messageId) {

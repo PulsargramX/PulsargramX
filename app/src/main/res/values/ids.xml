@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+  <item type="id" name="btn_captionPosition" />
   <item type="id" name="controller_pollStatistics" />
   <item type="id" name="btn_pollMedia" />
   <item type="id" name="btn_pollDurationCustom" />

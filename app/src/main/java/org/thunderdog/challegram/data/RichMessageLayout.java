@@ -76,6 +76,8 @@ import java.util.Map;
 import java.util.TimeZone;
 import java.util.WeakHashMap;
 
+import me.vkryl.android.AnimatorUtils;
+import me.vkryl.android.animator.FactorAnimator;
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.ColorUtils;
 import ru.noties.jlatexmath.JLatexMathDrawable;
@@ -1030,6 +1032,7 @@ public final class RichMessageLayout implements MessageTextSelectionSurface {
       // The viewer can return to a slide that has never been drawn in the bubble.
       if (node.spec.block instanceof TdApi.PageBlockSlideshow) {
         int index = node.wrappers.indexOf(wrapper);
+        node.resetSlideAnimation();
         if (node.spec.state.slideshowIndex != index) {
           node.spec.state.slideshowIndex = index;
           owner.invalidate();
@@ -1708,7 +1711,7 @@ public final class RichMessageLayout implements MessageTextSelectionSurface {
                ComplexReceiver receiver, float alpha) { }
   }
 
-  private final class MediaNode extends BlockNode {
+  private final class MediaNode extends BlockNode implements FactorAnimator.Target {
     final ArrayList<MediaWrapper> wrappers = new ArrayList<>();
     @Nullable TextWrapper fallback;
     @Nullable ImageFile mapImage;
@@ -1720,6 +1723,9 @@ public final class RichMessageLayout implements MessageTextSelectionSurface {
     int cellHeight;
     float touchStartX, touchStartY;
     int initialSlide;
+    float slideOffset, touchStartSlideOffset;
+    @Nullable FactorAnimator slideAnimator;
+    @Nullable VelocityTracker slideVelocity;
     boolean sliding;
     boolean slideshowTracking;
     boolean mapPressed;
@@ -1824,6 +1830,7 @@ public final class RichMessageLayout implements MessageTextSelectionSurface {
 
     private void addWrapper (MediaWrapper wrapper) {
       wrapper.setOnClickListener((view, clicked) -> {
+        resetSlideAnimation();
         openMedia(clicked);
         return true;
       });
@@ -1909,15 +1916,21 @@ public final class RichMessageLayout implements MessageTextSelectionSurface {
         return;
       }
       boolean slideshow = spec.block.getConstructor() == TdApi.PageBlockSlideshow.CONSTRUCTOR;
-      int first = slideshow ? Math.max(0, Math.min(wrappers.size() - 1,
-        spec.state.slideshowIndex)) : 0;
-      int last = slideshow ? first + 1 : wrappers.size();
+      float position = Math.max(0, Math.min(wrappers.size() - 1,
+        spec.state.slideshowIndex + slideOffset));
+      int first = slideshow ? (int) Math.floor(position) : 0;
+      int last = slideshow ? Math.min(wrappers.size(), (int) Math.ceil(position) + 1) :
+        wrappers.size();
+      int save = Views.save(canvas);
+      if (slideshow) canvas.clipRect(x, y, x + width, y + height);
       for (int index = first; index < last; index++) {
         MediaWrapper wrapper = wrappers.get(index);
         int drawIndex = slideshow ? 0 : index;
         int column = drawIndex % columns;
         int row = drawIndex / columns;
         int drawX = x + column * (cellWidth + Screen.dp(2f));
+        if (slideshow) drawX += Math.round((index - position) * width *
+          (message.isRtl ? -1f : 1f));
         int drawY = y + row * (cellHeight + Screen.dp(2f));
         long key = RichMessageFlattener.receiverKey(spec.path, index * 4);
         DoubleImageReceiver preview = receiver.getPreviewReceiver(key);
@@ -1925,9 +1938,10 @@ public final class RichMessageLayout implements MessageTextSelectionSurface {
           receiver.getImageReceiver(key + 1);
         wrapper.draw(view, canvas, drawX, drawY, preview, target, alpha);
       }
+      Views.restore(canvas, save);
       if (slideshow && wrappers.size() > 1) {
         Paint paint = Paints.getRegularTextPaint(12f, 0xffffffff);
-        String count = slideLabels[first];
+        String count = slideLabels[Math.round(position)];
         float countWidth = paint.measureText(count);
         RectF background = Paints.getRectF();
         background.set(x + width - countWidth - Screen.dp(16f), y + Screen.dp(8f),
@@ -1976,16 +1990,24 @@ public final class RichMessageLayout implements MessageTextSelectionSurface {
         wrappers.size() > 1;
       int action = event.getActionMasked();
       if (action == MotionEvent.ACTION_DOWN) {
+        if (slideAnimator != null) slideAnimator.cancel();
+        recycleSlideVelocity();
+        if (slideshow) {
+          slideVelocity = VelocityTracker.obtain();
+          slideVelocity.addMovement(event);
+        }
         touchView = view;
         touchStartX = event.getX();
         touchStartY = event.getY();
         initialSlide = Math.max(0, Math.min(wrappers.size() - 1, spec.state.slideshowIndex));
+        touchStartSlideOffset = slideOffset;
         sliding = false;
         slideshowTracking = slideshow;
         pressedMedia = wrappers.isEmpty() ? null : wrappers.get(slideshow ? initialSlide : 0);
         boolean handled = pressedMedia != null && pressedMedia.onTouchEvent(view, event);
         return handled || slideshow;
       }
+      if (slideVelocity != null) slideVelocity.addMovement(event);
       if (slideshowTracking && action == MotionEvent.ACTION_MOVE) {
         float dx = event.getX() - touchStartX;
         float dy = event.getY() - touchStartY;
@@ -1993,6 +2015,8 @@ public final class RichMessageLayout implements MessageTextSelectionSurface {
         if (!sliding && Math.abs(dy) > slop && Math.abs(dy) >= Math.abs(dx)) {
           cancelMediaTouch(view, event);
           slideshowTracking = false;
+          recycleSlideVelocity();
+          animateSlideOffset();
           return false;
         }
         if (!sliding && Math.abs(dx) > slop && Math.abs(dx) > Math.abs(dy)) {
@@ -2000,18 +2024,33 @@ public final class RichMessageLayout implements MessageTextSelectionSurface {
           if (view.getParent() != null) view.getParent().requestDisallowInterceptTouchEvent(true);
           cancelMediaTouch(view, event);
         }
-        if (sliding) return true;
+        if (sliding) {
+          updateSlideOffset(dx);
+          return true;
+        }
       }
       if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL ||
           action == MotionEvent.ACTION_POINTER_DOWN) {
         boolean wasSliding = sliding;
         if (sliding && action == MotionEvent.ACTION_UP) {
-          float distance = event.getX() - touchStartX;
-          int direction = (message.isRtl ? -distance : distance) < 0 ? 1 : -1;
-          spec.state.slideshowIndex = Math.max(0,
-            Math.min(wrappers.size() - 1, initialSlide + direction));
-          owner.invalidate();
+          updateSlideOffset(event.getX() - touchStartX);
+          float velocity = 0f;
+          if (slideVelocity != null) {
+            slideVelocity.computeCurrentVelocity(1000,
+              ViewConfiguration.get(view.getContext()).getScaledMaximumFlingVelocity());
+            velocity = slideVelocity.getXVelocity() * (message.isRtl ? 1f : -1f);
+          }
+          int direction = Math.abs(velocity) >=
+            ViewConfiguration.get(view.getContext()).getScaledMinimumFlingVelocity() ?
+            (velocity > 0f ? 1 : -1) :
+            Math.abs(slideOffset) >= .25f ? (slideOffset > 0f ? 1 : -1) : 0;
+          int selected = Math.max(0, Math.min(wrappers.size() - 1, initialSlide + direction));
+          // Keep the drawn position unchanged while the selected slide becomes the target.
+          slideOffset += initialSlide - selected;
+          spec.state.slideshowIndex = selected;
         }
+        recycleSlideVelocity();
+        if (slideshow) animateSlideOffset();
         if (sliding && view.getParent() != null) {
           view.getParent().requestDisallowInterceptTouchEvent(false);
         }
@@ -2023,6 +2062,44 @@ public final class RichMessageLayout implements MessageTextSelectionSurface {
       MediaWrapper target = pressedMedia;
       if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) pressedMedia = null;
       return target != null && target.onTouchEvent(view, event);
+    }
+
+    private void updateSlideOffset (float distance) {
+      float offset = touchStartSlideOffset + distance * (message.isRtl ? 1f : -1f) /
+        Math.max(1, width);
+      slideOffset = Math.max(-Math.min(1, initialSlide),
+        Math.min(Math.min(1, wrappers.size() - 1 - initialSlide), offset));
+      owner.invalidate();
+    }
+
+    private void animateSlideOffset () {
+      if (slideOffset == 0f) {
+        resetSlideAnimation();
+        return;
+      }
+      if (slideAnimator == null) {
+        slideAnimator = new FactorAnimator(0, this, AnimatorUtils.DECELERATE_INTERPOLATOR, 200);
+      }
+      slideAnimator.forceFactor(slideOffset);
+      slideAnimator.animateTo(0f);
+    }
+
+    private void resetSlideAnimation () {
+      if (slideAnimator != null) slideAnimator.forceFactor(0f);
+      slideOffset = 0f;
+    }
+
+    private void recycleSlideVelocity () {
+      if (slideVelocity != null) {
+        slideVelocity.recycle();
+        slideVelocity = null;
+      }
+    }
+
+    @Override
+    public void onFactorChanged (int id, float factor, float fraction, FactorAnimator callee) {
+      slideOffset = factor;
+      owner.invalidate();
     }
 
     private void cancelMediaTouch (View view, MotionEvent event) {
@@ -2095,6 +2172,8 @@ public final class RichMessageLayout implements MessageTextSelectionSurface {
 
     @Override
     public void performDestroy () {
+      recycleSlideVelocity();
+      resetSlideAnimation();
       for (MediaWrapper wrapper : wrappers) {
         wrapper.destroy();
       }
@@ -2122,7 +2201,9 @@ public final class RichMessageLayout implements MessageTextSelectionSurface {
         sliding = slideshowTracking = mapPressed = false;
         touchView = null;
         pressedMedia = null;
+        recycleSlideVelocity();
       }
+      if (attachedViews.isEmpty()) resetSlideAnimation();
       if (audioResult != null) {
         audioResult.detachFromView(view);
       }

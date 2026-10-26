@@ -3603,13 +3603,12 @@ public class ShareController extends TelegramViewController<ShareController.Args
         case MODE_TELEGRAM_FILES: {
           TdApi.FormattedText formattedCaption = StringUtils.isEmpty(args.telegramCaption) ? null : TD.newText(args.telegramCaption);
           TdApi.FormattedText messageCaption = formattedCaption != null && formattedCaption.text.codePointCount(0, formattedCaption.text.length()) <= tdlib.maxCaptionLength() ? formattedCaption : null;
-          boolean showCaptionAboveMedia = false; // TODO?
           if (formattedCaption != null && messageCaption == null) {
             functions.addAll(TD.sendMessageText(chatId, messageTopicId, null, sendOptions, new TdApi.InputMessageText(formattedCaption, null, false), tdlib.maxMessageTextLength()));
           }
           for (MediaItem item : args.telegramFiles) {
             boolean last = item == args.telegramFiles[args.telegramFiles.length - 1];
-            TdApi.InputMessageContent content = item.createShareContent(last ? messageCaption : null, last && showCaptionAboveMedia);
+            TdApi.InputMessageContent content = item.createShareContent(last ? messageCaption : null, item.showCaptionAboveMedia() && !ChatId.isSecret(chatId));
             if (content == null)
               return;
             functions.add(new TdApi.SendMessage(chatId, messageTopicId, null, sendOptions, null, content));
