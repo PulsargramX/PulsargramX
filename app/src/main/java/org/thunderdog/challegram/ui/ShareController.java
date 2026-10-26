@@ -1163,6 +1163,14 @@ public class ShareController extends TelegramViewController<ShareController.Args
     }
     sendButton.getChildAt(0).setId(R.id.btn_send);
     sendButton.getChildAt(0).setOnClickListener(this);
+    for (ImageView copyButton : new ImageView[] {sendButton.copyButton, sendButton.copyWithoutCaptionsButton}) {
+      copyButton.setOnClickListener(this);
+      copyButton.setOnLongClickListener(v -> {
+        context().tooltipManager().builder(v).show(tdlib, v.getContentDescription()).hideDelayed();
+        return true;
+      });
+      addThemeFilterListener(copyButton, ColorId.fillingPositiveContent);
+    }
     sendButton.getChildAt(0).setOnLongClickListener(v -> {
       if (selectedChats.size() > 0) {
         sendMessages(true, false, getArgumentsStrict().defaultSendOptions);
@@ -1466,6 +1474,7 @@ public class ShareController extends TelegramViewController<ShareController.Args
       tdlib.getMessageProperties(list, properties -> {
         runOnUiThreadOptional(() -> {
           messageProperties = properties;
+          updateCopyButtons();
           if (after != null) {
             after.runWithData(properties);
           }
@@ -1872,7 +1881,7 @@ public class ShareController extends TelegramViewController<ShareController.Args
     return false;
   }
 
-  private CharSequence getErrorMessage (long chatId) {
+  private CharSequence getErrorMessage (long chatId, boolean hideAuthor, boolean removeCaptions) {
     Args args = getArgumentsStrict();
     TdApi.Chat chat = tdlib.chatStrict(chatId);
 
@@ -1913,7 +1922,7 @@ public class ShareController extends TelegramViewController<ShareController.Args
           if (ChatId.isSecret(chatId)) {
             if (!properties.canBeCopiedToSecretChat)
               return Lang.getString(R.string.SecretChatForwardError);
-            TdApi.ForwardMessages function = new TdApi.ForwardMessages(chatId, null, message.chatId, new long[] {message.id}, new TdApi.MessageSendOptions(null, false, false, false, false, 0, false, null, 0, 0, true), needHideAuthor, needRemoveCaptions);
+            TdApi.ForwardMessages function = new TdApi.ForwardMessages(chatId, null, message.chatId, new long[] {message.id}, new TdApi.MessageSendOptions(null, false, false, false, false, 0, false, null, 0, 0, true), hideAuthor, removeCaptions);
             TdApi.Object check = tdlib.clientExecute(function, 1000L);
             if (check instanceof TdApi.Error) {
               return TD.toErrorString(check);
@@ -1953,7 +1962,11 @@ public class ShareController extends TelegramViewController<ShareController.Args
   }
 
   private boolean showErrorMessage (View anchorView, long chatId, boolean includeTitle) {
-    CharSequence errorMessage = getErrorMessage(chatId);
+    return showErrorMessage(anchorView, chatId, includeTitle, needHideAuthor, needRemoveCaptions);
+  }
+
+  private boolean showErrorMessage (View anchorView, long chatId, boolean includeTitle, boolean hideAuthor, boolean removeCaptions) {
+    CharSequence errorMessage = getErrorMessage(chatId, hideAuthor, removeCaptions);
     if (errorMessage != null) {
       if (anchorView == null) {
         anchorView = findVisibleChatView(chatId);
@@ -2165,9 +2178,13 @@ public class ShareController extends TelegramViewController<ShareController.Args
   @Override
   public void onClick (View v) {
     final int viewId = v.getId();
-    if (viewId == R.id.btn_send) {
+    if (viewId == R.id.btn_send || viewId == R.id.btn_forwardAsCopy || viewId == R.id.btn_forwardWithoutCaption) {
+      final boolean sendAsCopy = viewId != R.id.btn_send;
+      if (sendAsCopy && !canCopyMessages()) {
+        return;
+      }
       if (selectedChats.size() == 0) {
-        if (canShareLink) {
+        if (!sendAsCopy && canShareLink) {
           shareLink();
           // copyLink();
         }
@@ -2175,6 +2192,9 @@ public class ShareController extends TelegramViewController<ShareController.Args
         context().tooltipManager().builder(sendButton)
           .show(tdlib, Strings.buildMarkdown(this, Lang.getString(R.string.MessageContainsPremiumFeatures), null))
           .hideDelayed();
+      } else if (sendAsCopy) {
+        sendMessages(false, false, Td.newSendOptions(), true,
+          viewId == R.id.btn_forwardWithoutCaption, true);
       } else {
         performSend(false, Td.newSendOptions(), false);
       }
@@ -2633,6 +2653,10 @@ public class ShareController extends TelegramViewController<ShareController.Args
   // Button
 
   private static class SendButton extends FrameLayoutFix implements FactorAnimator.Target {
+    private final ImageView copyButton;
+    private final ImageView copyWithoutCaptionsButton;
+    private boolean copyButtonsVisible;
+
     public SendButton (Context context) {
       super(context);
       ViewUtils.setBackground(this, new Drawable() {
@@ -2662,6 +2686,37 @@ public class ShareController extends TelegramViewController<ShareController.Args
       Views.setClickable(view);
       view.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
       addView(view);
+      copyButton = newCopyButton(context, R.id.btn_forwardAsCopy,
+        R.drawable.baseline_content_copy_24, R.string.SendAsCopy, Screen.dp(56f));
+      copyWithoutCaptionsButton = newCopyButton(context, R.id.btn_forwardWithoutCaption,
+        R.drawable.baseline_content_copy_no_caption_24, R.string.SendAsCopyWithoutCaptions, 0);
+    }
+
+    private ImageView newCopyButton (Context context, int id, @DrawableRes int icon, @StringRes int description, int rightMargin) {
+      ImageView button = new ImageView(context);
+      button.setId(id);
+      button.setImageResource(icon);
+      button.setScaleType(ImageView.ScaleType.CENTER);
+      button.setColorFilter(Theme.getColor(ColorId.fillingPositiveContent));
+      button.setContentDescription(Lang.getString(description));
+      RippleSupport.setTransparentSelector(button);
+      Views.setClickable(button);
+      button.setVisibility(View.GONE);
+      FrameLayout.LayoutParams params = FrameLayoutFix.newParams(Screen.dp(56f), Screen.dp(56f), Gravity.TOP | Gravity.RIGHT);
+      params.rightMargin = rightMargin;
+      button.setLayoutParams(params);
+      addView(button);
+      return button;
+    }
+
+    public void setCopyButtonsVisible (boolean visible) {
+      if (copyButtonsVisible != visible) {
+        copyButtonsVisible = visible;
+        copyButton.setVisibility(visible ? View.VISIBLE : View.GONE);
+        copyWithoutCaptionsButton.setVisibility(visible ? View.VISIBLE : View.GONE);
+        Views.setRightMargin(getChildAt(0), visible ? Screen.dp(112f) : 0);
+        invalidate();
+      }
     }
 
     private boolean isReady;
@@ -2746,6 +2801,14 @@ public class ShareController extends TelegramViewController<ShareController.Args
         c.drawCircle(width / 2f, buttonHeight / 2f, radius * factor, Paints.fillingPaint(ColorUtils.alphaColor(factor, Theme.getColor(ColorId.fillingPositive))));
       }
       final int textColor = factor == 0f ? Theme.getColor(ColorId.textNeutral) : factor == 1f ? Theme.getColor(ColorId.fillingPositiveContent) : ColorUtils.fromToArgb(Theme.getColor(ColorId.textNeutral), Theme.getColor(ColorId.fillingPositiveContent), factor);
+      final int sendWidthAvailable = copyButtonsVisible ? width - Screen.dp(112f) : width;
+      if (copyButtonsVisible) {
+        for (int i = 1; i <= 2; i++) {
+          int x = width - Screen.dp(56f) * i;
+          c.drawRect(x, 0, x + Screen.dp(1f), buttonHeight,
+            Paints.fillingPaint(ColorUtils.alphaColor(.25f, textColor)));
+        }
+      }
       if (factor <= .5f) {
         TextPaint paint = Paints.getTitleBigPaint(copyTextFake);
         final int sourceTextColor = paint.getColor();
@@ -2757,7 +2820,7 @@ public class ShareController extends TelegramViewController<ShareController.Args
         TextPaint paint = Paints.getTitleBigPaint(sendTextFake);
         final int sourceTextColor = paint.getColor();
         paint.setColor(textColor);
-        c.drawText(sendText, width / 2f - sendWidth / 2, buttonHeight / 2f + Screen.dp(7f), paint);
+        c.drawText(sendText, sendWidthAvailable / 2f - sendWidth / 2, buttonHeight / 2f + Screen.dp(7f), paint);
         paint.setColor(sourceTextColor);
       }
     }
@@ -3077,7 +3140,27 @@ public class ShareController extends TelegramViewController<ShareController.Args
     if (canShareLink) {
       sendButton.setIsReady(isReady, true);
     }
+    updateCopyButtons();
     setIsExpanded(isReady);
+  }
+
+  private boolean canCopyMessages () {
+    if (mode != MODE_MESSAGES || messageProperties == null || messageProperties.length == 0) {
+      return false;
+    }
+    for (TdApi.MessageProperties properties : messageProperties) {
+      if (properties == null || !properties.canBeCopied) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private void updateCopyButtons () {
+    if (sendButton != null) {
+      sendButton.setCopyButtonsVisible(selectedChats.size() > 0 &&
+        hasRequiredPrivateTopicSelections() && canCopyMessages());
+    }
   }
 
   private float getKeyboardOffset () {
@@ -3460,23 +3543,27 @@ public class ShareController extends TelegramViewController<ShareController.Args
   private boolean needHideAuthor, needRemoveCaptions, forceSendWithoutSound;
 
   private void sendMessages (boolean forceGoToChat, boolean isSingleTap, @Nullable TdApi.MessageSendOptions finalSendOptions) {
-    sendMessages(forceGoToChat, isSingleTap, finalSendOptions, true);
+    sendMessages(forceGoToChat, isSingleTap, finalSendOptions, needHideAuthor, needRemoveCaptions, true);
   }
 
-  private void sendMessages (boolean forceGoToChat, boolean isSingleTap, @Nullable TdApi.MessageSendOptions finalSendOptions, boolean reloadProperties) {
+  private void sendMessages (boolean forceGoToChat, boolean isSingleTap, @Nullable TdApi.MessageSendOptions finalSendOptions, boolean hideAuthor, boolean removeCaptions, boolean reloadProperties) {
     if (selectedChats.size() == 0 || !hasRequiredPrivateTopicSelections() || isSent) {
       return;
     }
 
     if (mode == MODE_MESSAGES && reloadProperties) {
-      reloadMessageProperties(ignored -> sendMessages(forceGoToChat, isSingleTap, finalSendOptions, false));
+      reloadMessageProperties(ignored -> sendMessages(forceGoToChat, isSingleTap, finalSendOptions, hideAuthor, removeCaptions, false));
+      return;
+    }
+
+    if (mode == MODE_MESSAGES && hideAuthor && !canCopyMessages()) {
       return;
     }
 
     // Double check if there are any new restrictions
     for (int i = 0; i < selectedChats.size(); i++) {
       long chatId = selectedChats.valueAt(i).getChatId();
-      if (showErrorMessage(null, chatId, true)) {
+      if (showErrorMessage(null, chatId, true, hideAuthor, removeCaptions)) {
         return;
       }
     }
@@ -3493,12 +3580,12 @@ public class ShareController extends TelegramViewController<ShareController.Args
     // FIXME: it seems separate sendOptions for secret chats no longer required or something is broken?
     TdApi.MessageSendOptions secretSendOptions = Td.newSendOptions(cloudSendOptions);
 
-    boolean sendAsCopy = ClientPolicy.sendAsCopy(needHideAuthor,
+    boolean sendAsCopy = ClientPolicy.sendAsCopy(hideAuthor,
       mode == MODE_MESSAGES ? messageProperties : null);
 
     for (int i = 0; i < selectedChatIds.size(); i++) {
       final long chatId = selectedChatIds.get(i);
-      if (showErrorMessage(null, chatId, true))
+      if (showErrorMessage(null, chatId, true, hideAuthor, removeCaptions))
         return;
 
       // Get message topic for forum chats
@@ -3516,7 +3603,7 @@ public class ShareController extends TelegramViewController<ShareController.Args
       boolean messageReplyIncluded = false;
       if (hasComment) {
         TdApi.InputMessageReplyToMessage replyTo = null;
-        if (Config.FORCE_REPLY_WHEN_FORWARDING_WITH_COMMENT && !args.disallowReply && !ChatId.isSecret(chatId) && mode == MODE_MESSAGES && !(sendAsCopy || needRemoveCaptions) && args.messages[0].chatId != chatId) {
+        if (Config.FORCE_REPLY_WHEN_FORWARDING_WITH_COMMENT && !args.disallowReply && !ChatId.isSecret(chatId) && mode == MODE_MESSAGES && !(sendAsCopy || removeCaptions) && args.messages[0].chatId != chatId) {
           messageReplyIncluded = true;
 
           long singleSourceChatId = 0, singleSourceMediaGroupId = 0, contentfulMediaMessageId = 0;
@@ -3561,7 +3648,7 @@ public class ShareController extends TelegramViewController<ShareController.Args
           break;
         }
         case MODE_MESSAGES: {
-          if (!messageReplyIncluded && !TD.forwardMessages(chatId, messageTopicId, args.messages, sendAsCopy, needRemoveCaptions, sendOptions, functions))
+          if (!messageReplyIncluded && !TD.forwardMessages(chatId, messageTopicId, args.messages, sendAsCopy, removeCaptions, sendOptions, functions))
             return;
           break;
         }
