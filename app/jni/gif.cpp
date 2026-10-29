@@ -172,7 +172,9 @@ int open_codec_context (int *stream_idx, AVCodecContext **dec_ctx, AVFormatConte
     }
 
     auto context = *dec_ctx;
-    context->thread_count = 0;
+    // GifThread already serializes decoding. Per-file worker pools multiply native
+    // threads and frame buffers when many animations or video previews are loaded.
+    context->thread_count = 1;
     if (dec->capabilities & AV_CODEC_CAP_FRAME_THREADS) {
       context->thread_type = FF_THREAD_FRAME;
     } else if (dec->capabilities & AV_CODEC_CAP_SLICE_THREADS) {

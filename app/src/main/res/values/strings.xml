@@ -1697,6 +1697,7 @@
   <string name="DeveloperAndExperimental">Developer &amp; Experimental</string>
   <string name="SendAsButton">Show "Send as channel" button</string>
   <string name="CameraButtonToggle">Show camera button</string>
+  <string name="TrendingStickersButtonToggle">Show trending stickers button</string>
   <string name="VoiceVideoMessageButtonToggle">Show voice/video message button</string>
   <string name="DiscussButtonToggle">Show discuss button</string>
   <string name="MuteButtonToggle">Show mute/unmute button</string>

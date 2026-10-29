@@ -320,7 +320,8 @@ public class GifActor implements GifState.Callback, TGPlayerController.TrackChan
   // Decoder thread
   public void startDecoding (String path) {
     synchronized (this) {
-      if (isCancelled()) {
+      // Download completion and file updates can both enqueue this work.
+      if (isCancelled() || nativePtr != 0) {
         return;
       }
     }

@@ -856,10 +856,22 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
   // Other
 
+  private int getTopCaptionMargin () {
+    int top = topOffset;
+    for (View control : new View[] {headerView, receiverView, checkView, counterView}) {
+      if (control != null && control.getParent() == contentView && control.getVisibility() != View.GONE) {
+        FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) control.getLayoutParams();
+        int height = Math.max(control.getMeasuredHeight(), params.height);
+        top = Math.max(top, params.topMargin + height);
+      }
+    }
+    return top + Screen.dp(8f);
+  }
+
   private void checkCaptionButtonsY () {
     final boolean above = isCaptionAboveMediaForSending();
     final float offset = !above && keyboardFrameLayout != null && keyboardFrameLayout.getVisibility() == View.VISIBLE && keyboardFrameLayout.getParent() != null ? keyboardFrameLayout.getMeasuredHeight() : 0;
-    final int topMargin = above ? (headerView != null ? headerView.getMeasuredHeight() : Size.getHeaderPortraitSize()) : 0;
+    final int topMargin = above ? getTopCaptionMargin() : 0;
     for (View captionControl : new View[] {captionWrapView, captionEmojiButton, captionDoneButton}) {
       FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) captionControl.getLayoutParams();
       int gravity = (params.gravity & ~Gravity.VERTICAL_GRAVITY_MASK) | (above ? Gravity.TOP : Gravity.BOTTOM);
@@ -5564,6 +5576,10 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
       Views.setTopMargin(checkView, Screen.dp(20f) - Screen.dp(9f) + topOffset / 2);
       Views.setTopMargin(counterView, Screen.dp(26f) + topOffset / 2);
+      if (mode == MODE_GALLERY && captionWrapView != null &&
+          captionWrapView.getParent() == bottomWrap && captionDoneButton != null) {
+        checkCaptionButtonsY();
+      }
     }
   }
 
@@ -9521,7 +9537,6 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
     contentView.addView(bottomWrap);
     attachedViews.add(bottomWrap);
-    checkCaptionButtonsY();
 
     // Image overlay
 
@@ -9582,6 +9597,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       contentView.addView(receiverView);
       attachedViews.add(receiverView);
     }
+    checkCaptionButtonsY();
     return attachedViews;
   }
 

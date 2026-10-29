@@ -6923,6 +6923,16 @@ public class Settings {
     pmc.putBoolean(KEY_SEND_AS_BUTTON, show);
   }
 
+  private static final String KEY_TRENDING_STICKERS_BUTTON = "trending_stickers_button";
+
+  public boolean getTrendingStickersButton () {
+    return getBoolean(KEY_TRENDING_STICKERS_BUTTON, true);
+  }
+
+  public void setTrendingStickersButton (boolean show) {
+    pmc.putBoolean(KEY_TRENDING_STICKERS_BUTTON, show);
+  }
+
   private static final String KEY_CAMERA_BUTTON = "camera_button";
 
   public boolean getCameraButton () {

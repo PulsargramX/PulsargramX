@@ -94,6 +94,7 @@ import me.vkryl.android.animator.FactorAnimator;
 import me.vkryl.android.widget.FrameLayoutFix;
 import me.vkryl.core.ColorUtils;
 import me.vkryl.core.lambda.Destroyable;
+import tgx.td.ChatId;
 import tgx.td.Td;
 import tgx.td.TdConstants;
 

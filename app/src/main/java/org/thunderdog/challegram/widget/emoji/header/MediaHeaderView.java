@@ -69,6 +69,22 @@ public class MediaHeaderView extends RecyclerView {
     return mediaAdapter.hasRecents;
   }
 
+  @Override
+  protected void onAttachedToWindow () {
+    super.onAttachedToWindow();
+    if (mediaAdapter != null) {
+      mediaAdapter.checkTrendingStickersButton();
+    }
+  }
+
+  @Override
+  protected void onVisibilityChanged (@NonNull View changedView, int visibility) {
+    super.onVisibilityChanged(changedView, visibility);
+    if (visibility == VISIBLE && mediaAdapter != null) {
+      mediaAdapter.checkTrendingStickersButton();
+    }
+  }
+
   public void scrollToStickerSectionBySetIndex (int stickerSetIndex, boolean animated) {
     int i = mediaAdapter.headerItems.size() - mediaAdapter.getAddItemCount(false) + stickerSetIndex;
     scrollToSelectedObj(mediaAdapter.getObject(i), animated);
@@ -81,7 +97,10 @@ public class MediaHeaderView extends RecyclerView {
     if (isStickerSection) {
       i += mediaAdapter.headerItems.size() - mediaAdapter.getAddItemCount(false);
     }
-    setCurrentStickerSection(mediaAdapter.getObject(i), animated);
+    // Media controllers use fixed section IDs even when the trending shortcut is hidden.
+    Object section = !isStickerSection && i == 2 ?
+      mediaAdapter.trendingStickersSection : mediaAdapter.getObject(i);
+    setCurrentStickerSection(section, animated);
   }
 
   public void setShowRecents (boolean showRecents) {
@@ -123,6 +142,9 @@ public class MediaHeaderView extends RecyclerView {
 
   private void scrollToSelectedObj (Object obj, boolean animated) {
     int section = mediaAdapter.indexOfObject(obj);
+    if (section == -1) {
+      return;
+    }
     int first = ((LinearLayoutManager) getLayoutManager()).findFirstVisibleItemPosition();
     int last = ((LinearLayoutManager) getLayoutManager()).findLastVisibleItemPosition();
     int itemWidth = Screen.dp(44);
@@ -226,10 +248,13 @@ public class MediaHeaderView extends RecyclerView {
       this.onClickListener = onClickListener;
       this.themeProvider = themeProvider;
       this.headerItems = new ArrayList<>();
+      this.trendingStickersSection = new EmojiSection(parent, -3, R.drawable.outline_whatshot_24, R.drawable.baseline_whatshot_24).setMakeFirstTransparent();
       if (!hideSectionsExceptRecent) {
         this.headerItems.add(new EmojiSection(parent, -1, R.drawable.baseline_emoticon_outline_24, 0).setActiveDisabled());
         this.headerItems.add(new EmojiSection(parent, -2, R.drawable.deproko_baseline_gif_24, R.drawable.deproko_baseline_gif_filled_24));
-        this.headerItems.add(new EmojiSection(parent, -3, R.drawable.outline_whatshot_24, R.drawable.baseline_whatshot_24).setMakeFirstTransparent());
+        if (Settings.instance().getTrendingStickersButton()) {
+          this.headerItems.add(trendingStickersSection);
+        }
       }
       // this.favoriteSection = new EmojiSection(parent, -4, R.drawable.baseline_star_border_24, R.drawable.baseline_star_24).setMakeFirstTransparent();
       this.recentSection = new EmojiSection(parent, -4, R.drawable.baseline_access_time_24, R.drawable.baseline_watch_later_24).setMakeFirstTransparent();
@@ -245,6 +270,22 @@ public class MediaHeaderView extends RecyclerView {
 
       this.sectionItemCount = sectionItemCount;
       this.stickerSets = new ArrayList<>();
+    }
+
+    private void checkTrendingStickersButton () {
+      if (parent.isAnimatedEmojiOnly()) {
+        return;
+      }
+      int index = headerItems.indexOf(trendingStickersSection);
+      if (Settings.instance().getTrendingStickersButton()) {
+        if (index == -1) {
+          headerItems.add(2, trendingStickersSection);
+          notifyItemInserted(2);
+        }
+      } else if (index != -1) {
+        headerItems.remove(index);
+        notifyItemRemoved(index);
+      }
     }
 
     public void addHeaderItem (EmojiSection emojiSection) {
@@ -428,6 +469,7 @@ public class MediaHeaderView extends RecyclerView {
     }
 
     private final ArrayList<TGStickerSetInfo> stickerSets;
+    private final EmojiSection trendingStickersSection;
     private final EmojiSection recentSection; // favoriteSection
     private final EmojiSection trendingSection; // favoriteSection
 

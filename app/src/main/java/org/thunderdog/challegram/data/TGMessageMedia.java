@@ -345,12 +345,16 @@ public class TGMessageMedia extends TGMessage {
     return useBubbles() && !useForward() ? Screen.dp(TEXT_MARGIN) - getBubbleContentPadding() : 0;
   }
 
+  private int getCaptionMediaMargin () {
+    return Screen.dp(isCaptionAboveMedia() ? 4f : TEXT_MARGIN);
+  }
+
   private int getMediaTopOffset () {
-    return isCaptionAboveMedia() ? getCaptionTopPadding() + wrapper.getHeight() + Screen.dp(TEXT_MARGIN) : 0;
+    return isCaptionAboveMedia() ? getCaptionTopPadding() + wrapper.getHeight() + getCaptionMediaMargin() : 0;
   }
 
   private int getCaptionTopOffset () {
-    return isCaptionAboveMedia() ? getCaptionTopPadding() : mosaicWrapper.getHeight() + Screen.dp(TEXT_MARGIN);
+    return isCaptionAboveMedia() ? getCaptionTopPadding() : mosaicWrapper.getHeight() + getCaptionMediaMargin();
   }
 
   public long getCaptionMessageId () {
@@ -863,7 +867,7 @@ public class TGMessageMedia extends TGMessage {
     int mosaicHeight = mosaicWrapper != null ? mosaicWrapper.getHeight() : 0;
     return wrapper == null ?
       mosaicHeight :
-      mosaicHeight + wrapper.getHeight() + Screen.dp(TEXT_MARGIN) + getCaptionTopPadding();
+      mosaicHeight + wrapper.getHeight() + getCaptionMediaMargin() + getCaptionTopPadding();
   }
 
   // Touch

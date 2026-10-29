@@ -560,6 +560,7 @@
   <item type="id" name="btn_showPeerIds" />
   <item type="id" name="btn_sendAsButton" />
   <item type="id" name="btn_cameraButtonToggle" />
+  <item type="id" name="btn_trendingStickersButtonToggle" />
   <item type="id" name="btn_voiceVideoMessageButtonToggle" />
   <item type="id" name="btn_discussButtonToggle" />
   <item type="id" name="btn_muteButtonToggle" />

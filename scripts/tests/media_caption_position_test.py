@@ -35,7 +35,8 @@ class MediaCaptionPositionTest(unittest.TestCase):
             "public static TdApi.Message getAlbumCaptionMessage ("))
         source = source.replace("LAYOUT_METHODS", methods("data/TGMessageMedia.java",
             "private boolean checkCommonCaption (boolean force)", "private boolean isCaptionAboveMedia ()",
-            "private int getCaptionTopPadding ()", "private int getMediaTopOffset ()",
+            "private int getCaptionTopPadding ()", "private int getCaptionMediaMargin ()",
+            "private int getMediaTopOffset ()",
             "private int getCaptionTopOffset ()", "protected int getContentHeight ()",
             "protected boolean drawBubbleTimeOverContent ()", "protected int getBottomLineContentWidth ()",
             "protected int getFooterPaddingTop ()", "private void updateRounds ()",
@@ -43,8 +44,10 @@ class MediaCaptionPositionTest(unittest.TestCase):
         source = source.replace("PREVIEW_METHODS", methods("mediaview/MediaViewController.java",
             "private boolean canMoveCaption ()", "private boolean isCaptionAboveMediaForSending ()",
             "private void toggleCaptionPosition ()", "private void checkCaptionButtonsY ()",
+            "private int getTopCaptionMargin ()", "private void setTopOffset (int topOffset)",
             "private void updateCaptionLayout ()", "private void checkBottomWrapY ()")
-            .replace("View captionControl", "Control captionControl").replace("new View[]", "new Control[]"))
+            .replace("View captionControl", "Control captionControl")
+            .replace("View control", "Control control").replace("new View[]", "new Control[]"))
         sources = [ROOT / "tdlib/src/main/java/org/drinkless/tdlib/TdApi.java"]
         for name, content in {
             "CaptionPositionTest.java": source,
@@ -73,6 +76,9 @@ class MediaCaptionPositionTest(unittest.TestCase):
 
     def test_preview_toggle_and_keyboard_position(self):
         self.run_case("preview")
+
+    def test_picker_caption_clears_header_controls(self):
+        self.run_case("picker_header")
 
 
 class CaptionPositionWiringTest(unittest.TestCase):
@@ -169,14 +175,15 @@ public class CaptionPositionTest {
     static Object fillingPaint(int color) {return null;}
     static Object colorPaint(Object paint, int color) {return null;}
   }
-  static class View {static final int VISIBLE = 0;}
+  static class View {static final int VISIBLE = 0, GONE = 8;}
   static class MessageView extends View {Object getTextMediaReceiver() {return null;}}
   static class ComplexReceiver {}
   static class ViewSupport {
     static int clipPath(Canvas c, Object p) {return 0;} static void restoreClipPath(Canvas c, int n) {}
   }
   static class TextWrapper {
-    int getHeight() {return 30;} int getLastLineWidth() {return 100;}
+    int height = 30;
+    int getHeight() {return height;} int getLastLineWidth() {return 100;}
     boolean getLastLineIsRtl() {return false;}
     int y, reserved;
     void draw(Canvas c, Object... args) {reserved = (int)args[2]; y = (int)args[3];}
@@ -232,15 +239,22 @@ public class CaptionPositionTest {
       layout.bubbles = bubbles; layout.forward = forward;
       int height = layout.getContentHeight();
       layout.drawContent(new MessageView(), new Canvas(), 0, 50, 200, new ComplexReceiver());
-      check(layout.wrapper.y + 30 + 10 == layout.mosaicWrapper.y, "Top caption and media have a gap");
+      check(layout.wrapper.y + 30 + 4 == layout.mosaicWrapper.y, "Top caption uses mainline's compact 4dp media gap");
       check(layout.mosaicWrapper.y + 180 == 50 + height, "Media ends at content bottom");
       check(layout.wrapper.reserved == 0 && layout.drawBubbleTimeOverContent(), "Timestamp stays over media");
       check(layout.getBottomLineContentWidth() == -1, "Top caption never reserves the timestamp on its last line");
+      layout.wrapper.height = 90;
+      layout.drawContent(new MessageView(), new Canvas(), 0, 50, 200, new ComplexReceiver());
+      check(layout.wrapper.y + 90 + 4 == layout.mosaicWrapper.y &&
+        layout.mosaicWrapper.y + 180 == 50 + layout.getContentHeight(),
+        "Multiline captions preserve the compact gap and exact content bounds");
+      layout.wrapper.height = 30;
       ((TdApi.MessagePhoto)layout.msg.content).showCaptionAboveMedia = false;
       check(layout.checkCommonCaption(false), "Placement-only server updates rebuild layout");
       layout.drawContent(new MessageView(), new Canvas(), 0, 50, 200, new ComplexReceiver());
       check(layout.mosaicWrapper.y == 50 && layout.wrapper.y == 240, "Default caption follows media");
-      check(layout.getContentHeight() == height && !layout.drawBubbleTimeOverContent(), "Keep height when moving caption");
+      check(layout.getContentHeight() == height + 6 && !layout.drawBubbleTimeOverContent(),
+        "Only top captions lose 6dp of spacing; bottom captions keep their original layout");
       ((TdApi.MessagePhoto)layout.msg.content).showCaptionAboveMedia = true;
       layout.checkCommonCaption(false);
     }
@@ -315,17 +329,27 @@ public class CaptionPositionTest {
     check(TD.toFunctions(1, null, null, options, mixed, true).size() == 3, "Self-destruct media remains separate");
   }
   static class Gravity {static final int TOP = 48, BOTTOM = 80, RIGHT = 5, VERTICAL_GRAVITY_MASK = 112;}
-  static class FrameLayout {static class LayoutParams {int gravity = Gravity.BOTTOM | Gravity.RIGHT, topMargin, bottomMargin;}}
+  static class FrameLayout {
+    static class LayoutParams {
+      int gravity = Gravity.BOTTOM | Gravity.RIGHT, topMargin, bottomMargin, leftMargin, height = -2;
+    }
+  }
   static class Control {
     static final int VISIBLE = 0;
     FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(); float y;
+    int height = 250, visibility = VISIBLE;
+    Object parent;
     Object getLayoutParams() {return params;} void setLayoutParams(FrameLayout.LayoutParams p) {params = p;}
     void setTranslationY(float y) {this.y = y;} float getTranslationY() {return y;}
-    int getMeasuredHeight() {return 250;} int getVisibility() {return VISIBLE;}
-    Object getParent() {return this;}
+    int getMeasuredHeight() {return height;} int getVisibility() {return visibility;}
+    Object getParent() {return parent;}
   }
   static class Size {static int getHeaderPortraitSize() {return 56;}}
-  static class Views {static void setBottomMargin(Control c, int margin) {c.params.bottomMargin = margin;}}
+  static class Views {
+    static void setBottomMargin(Control c, int margin) {c.params.bottomMargin = margin;}
+    static void setTopMargin(Control c, int margin) {if (c != null) c.params.topMargin = margin;}
+    static void setPaddingTop(Control c, int padding) {}
+  }
   static class ChatId {static boolean isSecret(long id) {return id == -1;}}
   static class Preview {
     static final int MODE_GALLERY = 1;
@@ -347,14 +371,20 @@ public class CaptionPositionTest {
     float getKeyboardOffset() {return 80;}
     Control captionWrapView = new Control(), captionEmojiButton = new Control(), captionDoneButton = new Control();
     Control bottomWrap = new Control(), keyboardFrameLayout = new Control(), headerView;
-    Control thumbsRecyclerView, bottomSpace;
+    Control thumbsRecyclerView, bottomSpace, receiverView, checkView, counterView, othersView;
+    Object contentView = new Object();
+    int topOffset;
+    Preview() {
+      captionWrapView.parent = bottomWrap;
+      keyboardFrameLayout.parent = bottomWrap;
+    }
     Preview inlineResultsView; void updatePosition(boolean animate) {}
     PREVIEW_METHODS
   }
   static void previewTests() {
     Preview p = new Preview(); p.bottomWrap.y = -80;
     p.toggleCaptionPosition();
-    check(p.above && p.captionWrapView.params.topMargin == 56 &&
+    check(p.above && p.captionWrapView.params.topMargin == 8 &&
       (p.captionWrapView.params.gravity & Gravity.VERTICAL_GRAVITY_MASK) == Gravity.TOP,
       "Caption editor moves above media");
     check(p.captionWrapView.y == 80 && p.captionDoneButton.y == 80 && p.captionEmojiButton.y == 80,
@@ -373,8 +403,50 @@ public class CaptionPositionTest {
     p.checkBottomWrapY();
     check(p.bottomWrap.y == -80, "Reopening a top-caption selection can lay out before caption controls exist");
   }
+  static Control headerControl(Preview p, int top, int height) {
+    Control c = new Control(); c.parent = p.contentView;
+    c.params.topMargin = top; c.params.height = height;
+    c.height = 0; // Layout must already be safe before the first measurement.
+    return c;
+  }
+  static void pickerHeaderTests() {
+    Preview p = new Preview();
+    p.checkView = headerControl(p, 11, 60);
+    p.counterView = headerControl(p, 26, 30);
+    p.receiverView = headerControl(p, 4, 24);
+    p.bottomWrap.y = -80;
+    p.toggleCaptionPosition();
+    check(p.captionWrapView.params.topMargin == 79, "Caption starts below the full selection-button touch target");
+    for (int inset : new int[]{24, 80, 0}) {
+      p.setTopOffset(inset);
+      for (Control c : new Control[]{p.checkView, p.counterView, p.receiverView}) {
+        check(p.captionWrapView.params.topMargin >= c.params.topMargin + c.params.height + 8,
+          "Caption clears recipient, counter, and selection controls after system inset changes");
+      }
+      check(p.captionDoneButton.params.topMargin == p.captionWrapView.params.topMargin &&
+        p.captionEmojiButton.params.topMargin == p.captionWrapView.params.topMargin,
+        "Caption text, Done, and emoji button share the safe top row");
+      check(p.captionWrapView.y + p.bottomWrap.y == 0, "Header clearance is independent of keyboard translation");
+    }
+    p.receiverView.height = 120; p.checkCaptionButtonsY();
+    check(p.captionWrapView.params.topMargin == 132, "Measured large-font recipient rows also reserve their height");
+    p.headerView = headerControl(p, 0, 160); p.checkCaptionButtonsY();
+    check(p.captionWrapView.params.topMargin == 168, "Account for an attached header in media edit mode");
+    p.headerView.parent = null; p.checkView.parent = null; p.counterView.parent = null;
+    p.receiverView.visibility = View.GONE; p.checkCaptionButtonsY();
+    check(p.captionWrapView.params.topMargin == 8, "Detached and gone header controls do not reserve space");
+    p.toggleCaptionPosition();
+    check(p.captionWrapView.params.topMargin == 0 &&
+      (p.captionWrapView.params.gravity & Gravity.VERTICAL_GRAVITY_MASK) == Gravity.BOTTOM,
+      "Moving caption back down removes header clearance");
+  }
   public static void main(String[] args) {
-    switch (args[0]) {case "albums": albumTests(); break; case "layout": layoutTests(); break; case "preview": previewTests(); break;}
+    switch (args[0]) {
+      case "albums": albumTests(); break;
+      case "layout": layoutTests(); break;
+      case "preview": previewTests(); break;
+      case "picker_header": pickerHeaderTests(); break;
+    }
   }
 }
 '''

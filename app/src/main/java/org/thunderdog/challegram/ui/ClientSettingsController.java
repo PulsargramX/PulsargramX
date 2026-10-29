@@ -45,6 +45,8 @@ public class ClientSettingsController extends RecyclerViewController<Void> imple
           view.getToggler().setRadioEnabled(Settings.instance().getSendAsButton(), isUpdate);
         } else if (itemId == R.id.btn_cameraButtonToggle) {
           view.getToggler().setRadioEnabled(Settings.instance().getCameraButton(), isUpdate);
+        } else if (itemId == R.id.btn_trendingStickersButtonToggle) {
+          view.getToggler().setRadioEnabled(Settings.instance().getTrendingStickersButton(), isUpdate);
         } else if (itemId == R.id.btn_voiceVideoMessageButtonToggle) {
           view.getToggler().setRadioEnabled(Settings.instance().getVoiceVideoMessageButton(), isUpdate);
         } else if (itemId == R.id.btn_discussButtonToggle) {
@@ -100,6 +102,8 @@ public class ClientSettingsController extends RecyclerViewController<Void> imple
     // Media & Content
     items.add(new ListItem(ListItem.TYPE_SHADOW_TOP));
     items.add(new ListItem(ListItem.TYPE_HEADER, 0, 0, R.string.MediaAndContent));
+    items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_trendingStickersButtonToggle, R.drawable.outline_whatshot_24, R.string.TrendingStickersButtonToggle));
+    items.add(new ListItem(ListItem.TYPE_SEPARATOR_FULL));
     items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_copyPhotoToggle, R.drawable.baseline_content_copy_24, R.string.CopyPhotoToggle));
     items.add(new ListItem(ListItem.TYPE_SEPARATOR_FULL));
     items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_saveCameraPhotosToGallery, R.drawable.baseline_camera_alt_24, R.string.SaveCameraPhotosToGallery));
@@ -140,6 +144,9 @@ public class ClientSettingsController extends RecyclerViewController<Void> imple
     } else if (viewId == R.id.btn_cameraButtonToggle) {
       boolean show = adapter.toggleView(v);
       Settings.instance().setCameraButton(show);
+    } else if (viewId == R.id.btn_trendingStickersButtonToggle) {
+      boolean show = adapter.toggleView(v);
+      Settings.instance().setTrendingStickersButton(show);
     } else if (viewId == R.id.btn_voiceVideoMessageButtonToggle) {
       boolean show = adapter.toggleView(v);
       Settings.instance().setVoiceVideoMessageButton(show);
