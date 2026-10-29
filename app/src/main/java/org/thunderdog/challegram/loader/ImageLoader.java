@@ -309,9 +309,9 @@ public class ImageLoader {
     return found;
   }
 
-  public void onResult (ImageFile file, boolean success, Bitmap bitmap) {
+  public void onResult (ImageActor actor, ImageFile file, boolean success, Bitmap bitmap) {
     if (Thread.currentThread() != thread) {
-      thread.onResult(file, success, bitmap);
+      thread.onResult(actor, file, success, bitmap);
       return;
     }
 
@@ -326,7 +326,8 @@ public class ImageLoader {
         }
       }
 
-      if (record != null) {
+      // A cancelled decode can finish after a new actor has taken the same file key.
+      if (record != null && record.getActor() == actor) {
         watchers.remove(file.toString());
 
         for (WatcherReference reference : record.getWatchers()) {
@@ -334,7 +335,7 @@ public class ImageLoader {
         }
       } else {
         if (Log.isEnabled(Log.TAG_IMAGE_LOADER)) {
-          Log.d(Log.TAG_IMAGE_LOADER, "#%s: wanted to dispatch result, but there're no listeners anymore", file.toString());
+          Log.d(Log.TAG_IMAGE_LOADER, "#%s: ignoring result from an inactive actor", file.toString());
         }
         if (success && !file.shouldBeCached()) {
           if (Log.isEnabled(Log.TAG_IMAGE_LOADER)) {
@@ -342,6 +343,7 @@ public class ImageLoader {
           }
           bitmap.recycle();
         }
+        return;
       }
 
       final boolean isRemote = file instanceof ImageFileRemote;

@@ -48,8 +48,8 @@ public class ImageThread extends BaseThread {
     sendMessage(Message.obtain(getHandler(), LOAD_COMPLETE, new Object[] {actor, file}), 0);
   }
 
-  public void onResult (ImageFile file, boolean success, Bitmap bitmap) {
-    sendMessage(Message.obtain(getHandler(), ACTOR_RESULT, success ? 1 : 0, 0, new Object[] {file, bitmap}), 0);
+  public void onResult (ImageActor actor, ImageFile file, boolean success, Bitmap bitmap) {
+    sendMessage(Message.obtain(getHandler(), ACTOR_RESULT, success ? 1 : 0, 0, new Object[] {actor, file, bitmap}), 0);
   }
 
   public void clear (int accountId, boolean withMemcache) {
@@ -86,10 +86,11 @@ public class ImageThread extends BaseThread {
       case ACTOR_RESULT: {
         Object[] data = (Object[]) msg.obj;
 
-        ImageLoader.instance().onResult((ImageFile) data[0], msg.arg1 == 1, (Bitmap) data[1]);
+        ImageLoader.instance().onResult((ImageActor) data[0], (ImageFile) data[1], msg.arg1 == 1, (Bitmap) data[2]);
 
         data[0] = null;
         data[1] = null;
+        data[2] = null;
 
         break;
       }

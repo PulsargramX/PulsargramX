@@ -135,7 +135,7 @@ public class ImageActor implements ImageReader.Listener, AudioController.ApicLis
       }*/
     }
 
-    ImageLoader.instance().onResult(file, success, result);
+    ImageLoader.instance().onResult(this, file, success, result);
   }
 
 
