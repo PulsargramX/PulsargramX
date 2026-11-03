@@ -152,7 +152,10 @@ def verify_tdlib(root, apk):
 
 def verify_profiles(root, apk, variant="publicLatestRelease"):
   intermediates = root / "app/build/intermediates"
-  saved = root / "app/src/main/generated/baselineProfiles"
+  match = re.fullmatch(r"(?:public|personal)([A-Z][a-z]*)Release", variant)
+  require(match is not None, "Unsupported release variant for profile verification")
+  sdk = match.group(1).lower()
+  saved = root / f"app/src/{sdk}Release/generated/baselineProfiles"
   for kind, name in [("art", "baseline-prof.txt"), ("startup", "startup-prof.txt")]:
     merged = only_file(intermediates / f"merged_{kind}_profile/{variant}", name)
     app_rules = {

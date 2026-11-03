@@ -152,5 +152,41 @@ class CommandLineTest(unittest.TestCase):
         signer.assert_called_once_with(tools, Path("release.apk"))
 
 
+
+class ReleaseProfilesTest(unittest.TestCase):
+  def test_sdk_profiles_are_verified_for_both_editions(self):
+    from zipfile import ZipFile
+    for edition in ("public", "personal"):
+      for sdk in ("latest", "qrs", "nop"):
+        with self.subTest(edition=edition, sdk=sdk), tempfile.TemporaryDirectory() as directory:
+          root = Path(directory)
+          variant = edition + sdk.capitalize() + "Release"
+          saved = root / f"app/src/{sdk}Release/generated/baselineProfiles"
+          saved.mkdir(parents=True)
+          intermediates = root / "app/build/intermediates"
+          for kind, name in (("art", "baseline-prof.txt"), ("startup", "startup-prof.txt")):
+            rule = "HLorg/thunderdog/challegram/MainActivity;"
+            (saved / name).write_text(rule + "\n")
+            merged = intermediates / f"merged_{kind}_profile/{variant}" / name
+            merged.parent.mkdir(parents=True)
+            merged.write_text(rule + "\n")
+          apk = root / "release.apk"
+          with ZipFile(apk, "w") as archive:
+            for kind, name, magic in (("binary_art_profile", "baseline.prof", b"pro\0"),
+                                     ("binary_art_profile_metadata", "baseline.profm", b"prm\0")):
+              compiled = intermediates / kind / variant / name
+              compiled.parent.mkdir(parents=True)
+              compiled.write_bytes(magic + b"fixture")
+              archive.writestr("assets/dexopt/" + name, compiled.read_bytes())
+            for library in ("libtgxjni.so", "libtgcallsjni.so", "libtdjni.so",
+                            "libleveldbjni.so", "libcryptox.so", "libsslx.so"):
+              archive.writestr("lib/arm64-v8a/" + library, b"\x7fELFfixture")
+          with contextlib.redirect_stdout(io.StringIO()):
+            VERIFY.verify_profiles(root, apk, variant)
+          merged.write_text("")
+          with self.assertRaisesRegex(ValueError, "profile is missing"):
+            VERIFY.verify_profiles(root, apk, variant)
+
+
 if __name__ == "__main__":
   unittest.main()
