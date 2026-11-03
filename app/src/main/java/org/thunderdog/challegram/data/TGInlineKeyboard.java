@@ -88,6 +88,7 @@ public class TGInlineKeyboard {
   private int maxWidth;
   private @Nullable TdApi.ReplyMarkupInlineKeyboard keyboard;
   private long messageId;
+  private boolean rich;
 
   private final ArrayList<Button> buttons;
 
@@ -101,6 +102,19 @@ public class TGInlineKeyboard {
     this.parent = parent; //  owned ? parent : null;
     this.buttons = new ArrayList<>();
     this.rounder = new RectF();
+  }
+
+  public static Button richButton (@NonNull TGMessage parent, TdApi.InlineButton button) {
+    TGInlineKeyboard keyboard = new TGInlineKeyboard(parent, false);
+    keyboard.rich = true;
+    Button action = new Button(keyboard, parent, new TdApi.InlineKeyboardButton(
+      RichMessageUtils.richTextToPlain(button.text), 0, button.style, button.type), Screen.dp(300f));
+    action.setViewProvider(parent.currentViews);
+    return action;
+  }
+
+  private long getMessageId () {
+    return rich ? parent.getMessage().id : messageId;
   }
 
   public void clear () {
@@ -815,6 +829,10 @@ public class TGInlineKeyboard {
       return true;
     }
 
+    public void setRichBounds (int left, int top, int right, int bottom) {
+      dirtyRect.set(left, top, right, bottom);
+    }
+
     public void performClick (View view) {
       if (!isBlocked()) {
         performAction(view, true);
@@ -1191,7 +1209,7 @@ public class TGInlineKeyboard {
                   cancelDelayedProgress();
                   animateProgressFactor(1f);
                 }
-                context.context.tdlib.send(new TdApi.GetCallbackQueryAnswer(parent.getChatId(), context.messageId, new TdApi.CallbackQueryPayloadDataWithPassword(password, data)), getAnswerCallback(currentContextId, view,false));
+                context.context.tdlib.send(new TdApi.GetCallbackQueryAnswer(parent.getChatId(), context.getMessageId(), new TdApi.CallbackQueryPayloadDataWithPassword(password, data)), getAnswerCallback(currentContextId, view,false));
               }
             });
           };
@@ -1245,7 +1263,7 @@ public class TGInlineKeyboard {
           showProgressDelayed();
 
           final byte[] data = ((TdApi.InlineKeyboardButtonTypeCallback) type).data;
-          context.context.tdlib().send(new TdApi.GetCallbackQueryAnswer(parent.getChatId(), context.messageId, new TdApi.CallbackQueryPayloadData(data)), getAnswerCallback(currentContextId, view,false));
+          context.context.tdlib().send(new TdApi.GetCallbackQueryAnswer(parent.getChatId(), context.getMessageId(), new TdApi.CallbackQueryPayloadData(data)), getAnswerCallback(currentContextId, view,false));
 
           break;
         }
@@ -1263,7 +1281,7 @@ public class TGInlineKeyboard {
           makeActive();
           showProgressDelayed();
 
-          context.context.tdlib().send(new TdApi.GetCallbackQueryAnswer(parent.getChatId(), context.messageId, new TdApi.CallbackQueryPayloadGame(data)), getAnswerCallback(currentContextId, view, true));
+          context.context.tdlib().send(new TdApi.GetCallbackQueryAnswer(parent.getChatId(), context.getMessageId(), new TdApi.CallbackQueryPayloadGame(data)), getAnswerCallback(currentContextId, view, true));
           break;
         }
         case TdApi.InlineKeyboardButtonTypeUser.CONSTRUCTOR: {
@@ -1300,7 +1318,7 @@ public class TGInlineKeyboard {
           showProgressDelayed();
 
           TdApi.InlineKeyboardButtonTypeLoginUrl button = (TdApi.InlineKeyboardButtonTypeLoginUrl) type;
-          context.context.tdlib().send(new TdApi.GetLoginUrlInfo(context.context.getChatId(), context.messageId, button.id), getLoginCallback(currentContextId, view, button, needVerify));
+          context.context.tdlib().send(new TdApi.GetLoginUrlInfo(context.context.getChatId(), context.getMessageId(), button.id), getLoginCallback(currentContextId, view, button, needVerify));
           break;
         }
         case TdApi.InlineKeyboardButtonTypeDisabled.CONSTRUCTOR: {
@@ -1375,7 +1393,7 @@ public class TGInlineKeyboard {
                 if (needSignIn) {
                   makeActive();
                   showProgressDelayed();
-                  context.context.tdlib().send(new TdApi.GetLoginUrl(parent.getChatId(), context.messageId, button.id, needWriteAccess), getLoginUrlCallback(currentContextId, view, button, needVerify));
+                  context.context.tdlib().send(new TdApi.GetLoginUrl(parent.getChatId(), context.getMessageId(), button.id, needWriteAccess), getLoginUrlCallback(currentContextId, view, button, needVerify));
                 } else {
                   openUrl(currentContextId, view, button.url, false);
                 }

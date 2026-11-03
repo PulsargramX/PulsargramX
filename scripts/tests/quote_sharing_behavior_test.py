@@ -70,7 +70,8 @@ public class QuoteSharingTest {
   }
   static class TdlibUi {
     static class ChatOpenParameters {
-      boolean keep;
+      boolean keep; Runnable done;
+      ChatOpenParameters onDone(Runnable done) {this.done=done; return this;}
       ChatOpenParameters keepStack() {keep = true; return this;}
     }
   }
@@ -96,6 +97,8 @@ public class QuoteSharingTest {
     void setArguments(Arguments args) {this.args = args;}
   }
   static class ChatPickerController extends ChatsController {
+    boolean dismissed;
+    void dismissAfterChatOpen() {dismissed=true;}
     ChatPickerController(Object context, Tdlib tdlib) {super(context, tdlib);}
   }
   static class MessagesController {
@@ -166,6 +169,10 @@ public class QuoteSharingTest {
   static void check(boolean value, String reason) {
     if (!value) throw new AssertionError(reason);
   }
+  static TdApi.InputTextQuote quote(TdApi.FormattedText text, int position) {
+    TdApi.InputTextQuote quote = new TdApi.InputTextQuote();
+    quote.text = text; quote.position = position; return quote;
+  }
   static TdApi.Chat chat(long id, TdApi.ChatType type) {
     TdApi.Chat chat = new TdApi.Chat(); chat.id = id; chat.type = type; return chat;
   }
@@ -175,7 +182,7 @@ public class QuoteSharingTest {
     MessageWithProperties post = new MessageWithProperties(-100, 42);
     post.properties.canBeRepliedInAnotherChat = true;
     TdApi.TextEntity bold = new TdApi.TextEntity(0, 6, new TdApi.TextEntityTypeBold());
-    TdApi.InputTextQuote quote = new TdApi.InputTextQuote(
+    TdApi.InputTextQuote quote = quote(
       new TdApi.FormattedText("quoted part", new TdApi.TextEntity[]{bold}), 13);
     check(source.canQuoteMessage(post), "Offer Quote in a channel without a composer");
     source.selecting = true;
@@ -202,6 +209,11 @@ public class QuoteSharingTest {
     TdlibUi.ChatOpenParameters params = new TdlibUi.ChatOpenParameters();
     picker.delegate.modifyChatOpenParams(params);
     check(params.keep, "Preserve the source channel in navigation history");
+    check(!((ChatPickerController)source.picker).dismissed && params.done != null,
+      "Retain picker while opening destination");
+    params.done.run();
+    check(((ChatPickerController)source.picker).dismissed,
+      "Remove quote picker after successful handoff");
     MessagesController.ReplyInfo payload = (MessagesController.ReplyInfo) picker.delegate.getShareItem();
     MessagesController target = new MessagesController(null, tdlib);
     target.writable = true;
@@ -243,7 +255,7 @@ public class QuoteSharingTest {
     check(!source.canQuoteMessage(post), "Do not quote a scheduled post");
     post.message.schedulingState = null;
     int replies = source.replies;
-    source.quoteMessage(post, new TdApi.InputTextQuote(new TdApi.FormattedText("", null), 0));
+    source.quoteMessage(post, quote(new TdApi.FormattedText("", null), 0));
     check(source.replies == replies, "Ignore an empty selection");
     post.properties.canBeRepliedInAnotherChat = true;
     ForumTopicsController topics = new ForumTopicsController(tdlib, forum, payload);
@@ -312,6 +324,65 @@ public class QuoteSharingTest {
     self.assertIn("closeSelectMode(false, animated)", java_method(
       read(nav + "HeaderView.java"), "public void closeSelectMode (boolean animated)",
     ))
+
+
+  def test_quote_picker_leaves_stack_only_when_destination_focuses(self):
+    method = java_method(read(UI + "ChatPickerController.java"),
+                         "public void dismissAfterChatOpen ()")
+    harness = r'''
+import java.util.*;
+public class PickerBackTest {
+  static class ViewController<T> {
+    List<ViewController<?>> stack; List<Runnable> listeners=new ArrayList<>();
+    boolean destroyed;
+    void addOneShotFocusListener(Runnable action) {listeners.add(action);}
+    int stackSize() {return stack.size();}
+    ViewController<?> stackItemAt(int i) {return stack.get(i);}
+    void destroyStackItemAt(int i) {stack.remove(i).destroyed=true;}
+    void focus() {for (Runnable action:new ArrayList<>(listeners)) action.run(); listeners.clear();}
+  }
+  static class Navigation {
+    ViewController<?> current;
+    ViewController<?> getCurrentStackItem() {return current;}
+  }
+  static class Context {
+    Navigation nav=new Navigation(); Navigation navigation() {return nav;}
+  }
+  static class Picker extends ViewController<Object> {
+    Context context=new Context();
+    METHOD
+  }
+  static void check(boolean value,String text) {if (!value) throw new AssertionError(text);}
+  public static void main(String[] args) {
+    for (String destinationType:new String[]{"chat","forum topics"}) {
+      Picker picker=new Picker(); ViewController<?> source=new ViewController<>();
+      ViewController<?> otherPicker=new ViewController<>(), target=new ViewController<>();
+      List<ViewController<?>> stack=new ArrayList<>(Arrays.asList(source,otherPicker,picker,target));
+      target.stack=stack; picker.context.nav.current=target;
+      picker.dismissAfterChatOpen();
+      check(stack.contains(picker) && !picker.destroyed,"Retain outgoing picker during transition");
+      target.focus();
+      check(picker.destroyed && stack.equals(Arrays.asList(source,otherPicker,target)),
+        "Remove quote picker instance after opening " + destinationType);
+      stack.remove(target);
+      check(stack.get(stack.size()-1)==otherPicker,"Back skips the quote picker");
+    }
+    Picker failed=new Picker(); failed.context.nav.current=failed;
+    failed.dismissAfterChatOpen();
+    check(!failed.destroyed && failed.listeners.isEmpty(),"Failed navigation keeps picker usable");
+    failed.context.nav.current=null; failed.dismissAfterChatOpen();
+    check(!failed.destroyed,"Missing destination does not dismiss picker");
+  }
+}
+'''.replace("METHOD", method)
+    with tempfile.TemporaryDirectory() as directory:
+      path = Path(directory) / "PickerBackTest.java"
+      path.write_text(harness)
+      compiled = subprocess.run(["javac", str(path)], capture_output=True, text=True)
+      self.assertEqual(compiled.returncode, 0, compiled.stderr)
+      executed = subprocess.run(["java", "-cp", directory, "PickerBackTest"],
+                                capture_output=True, text=True)
+      self.assertEqual(executed.returncode, 0, executed.stderr)
 
 
 if __name__ == "__main__":

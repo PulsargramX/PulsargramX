@@ -197,7 +197,7 @@ final class WebAppStoryComposer {
       TdApi.StoryPrivacySettings settings = privacy.getSelectedItemPosition() == 0 ? new TdApi.StoryPrivacySettingsContacts(new long[0]) :
         privacy.getSelectedItemPosition() == 1 ? new TdApi.StoryPrivacySettingsCloseFriends() : new TdApi.StoryPrivacySettingsEveryone(new long[0]);
       TdApi.InputStoryAreas areas = includeLink.isChecked() ? new TdApi.InputStoryAreas(new TdApi.InputStoryArea[] {
-        new TdApi.InputStoryArea(new TdApi.StoryAreaPosition(50, 80, 70, 8, 0, 10), new TdApi.InputStoryAreaTypeLink(linkUrl))}) : null;
+        new TdApi.InputStoryArea(new TdApi.AreaPosition(50, 80, 70, 8, 0, 10), new TdApi.InputStoryAreaTypeLink(linkUrl))}) : null;
       boolean isKept = keep.isChecked(), isProtected = protect.isChecked();
       dialog.dismiss(); stopVideo();
       dialog = actions.show(new AlertDialog.Builder(actions.host.activity()).setTitle(R.string.WebAppStoryTitle)

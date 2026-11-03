@@ -327,6 +327,16 @@ public final class RichMessageUtils {
             appendCaptionPlain(out, slideshow.caption);
             break;
           }
+          case TdApi.PageBlockButtonRow.CONSTRUCTOR:
+            TdApi.InlineButton[] buttons = ((TdApi.PageBlockButtonRow) block).buttons;
+            if (buttons != null) {
+              for (TdApi.InlineButton button : buttons) {
+                if (button == null) continue;
+                appendRichTextPlain(out, button.text);
+                out.append('\n');
+              }
+            }
+            break;
           case TdApi.PageBlockTable.CONSTRUCTOR:
             appendTablePlain(out, (TdApi.PageBlockTable) block);
             break;
@@ -570,6 +580,16 @@ public final class RichMessageUtils {
             out.append("</figure>");
             break;
           }
+          case TdApi.PageBlockButtonRow.CONSTRUCTOR:
+            out.append("<div class=\"buttons\">");
+            TdApi.InlineButton[] buttons = ((TdApi.PageBlockButtonRow) block).buttons;
+            if (buttons != null) {
+              for (TdApi.InlineButton button : buttons) {
+                appendButtonHtml(out, button);
+              }
+            }
+            out.append("</div>");
+            break;
           case TdApi.PageBlockTable.CONSTRUCTOR:
             appendTableHtml(out, (TdApi.PageBlockTable) block);
             break;
@@ -724,6 +744,10 @@ public final class RichMessageUtils {
     }
     try {
       switch (text.getConstructor()) {
+        case TdApi.RichTextButton.CONSTRUCTOR:
+          TdApi.InlineButton button = ((TdApi.RichTextButton) text).button;
+          if (button != null) appendRichTextPlain(out, button.text);
+          return;
         case TdApi.RichTextPlain.CONSTRUCTOR:
           out.append(nullToEmpty(((TdApi.RichTextPlain) text).text));
           return;
@@ -780,6 +804,9 @@ public final class RichMessageUtils {
     }
     try {
       switch (text.getConstructor()) {
+        case TdApi.RichTextButton.CONSTRUCTOR:
+          appendButtonHtml(out, ((TdApi.RichTextButton) text).button);
+          return;
         case TdApi.RichTextPlain.CONSTRUCTOR:
           out.append(escapeHtml(nullToEmpty(((TdApi.RichTextPlain) text).text)));
           return;
@@ -1193,7 +1220,23 @@ public final class RichMessageUtils {
     return null;
   }
 
+  private static void appendButtonHtml (StringBuilder out, @Nullable TdApi.InlineButton button) {
+    if (button == null) return;
+    if (button.type instanceof TdApi.InlineKeyboardButtonTypeUrl) {
+      link(out, ((TdApi.InlineKeyboardButtonTypeUrl) button.type).url, button.text);
+    } else {
+      // Callback and login buttons require the original Telegram message context.
+      out.append("<span class=\"button\">");
+      appendRichTextHtml(out, button.text);
+      out.append("</span>");
+    }
+  }
+
   private static @Nullable TdApi.RichText wrappedRichText (TdApi.RichText text) {
+    if (text instanceof TdApi.RichTextButton) {
+      TdApi.InlineButton button = ((TdApi.RichTextButton) text).button;
+      return button != null ? button.text : null;
+    }
     try {
       for (Field field : text.getClass().getFields()) {
         if (TdApi.RichText.class.isAssignableFrom(field.getType())) {

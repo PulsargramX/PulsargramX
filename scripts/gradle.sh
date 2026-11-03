@@ -52,6 +52,11 @@ if ! "$has_console"; then
   gradle_args+=(--console=plain)
 fi
 
+# AGP parses jlink --version from stdout. HotSpot's cgroup-path warnings can
+# precede that version inside a container entered into a systemd scope. Apply
+# this to child JDK tools too, preserving caller options and cgroup enforcement.
+export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }-Xlog:os+container=off"
+
 start_time=$SECONDS
 ./gradlew "${gradle_args[@]}" >"$log_file" 2>&1
 gradle_status=$?

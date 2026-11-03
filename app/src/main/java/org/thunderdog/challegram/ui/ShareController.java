@@ -49,6 +49,7 @@ import androidx.collection.SparseArrayCompat;
 import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
+import androidx.viewpager.widget.PagerAdapter;
 
 import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.Log;
@@ -67,25 +68,32 @@ import org.thunderdog.challegram.data.InlineResult;
 import org.thunderdog.challegram.data.RichMessageUtils;
 import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.data.TGFoundChat;
+import org.thunderdog.challegram.emoji.Emoji;
 import org.thunderdog.challegram.mediaview.data.MediaItem;
 import org.thunderdog.challegram.navigation.BackHeaderButton;
 import org.thunderdog.challegram.navigation.DoubleHeaderView;
 import org.thunderdog.challegram.navigation.HeaderButton;
 import org.thunderdog.challegram.navigation.HeaderView;
 import org.thunderdog.challegram.navigation.Menu;
-import org.thunderdog.challegram.navigation.MenuMoreWrap;
 import org.thunderdog.challegram.navigation.TelegramViewController;
 import org.thunderdog.challegram.navigation.TooltipOverlayView;
 import org.thunderdog.challegram.navigation.ViewController;
+import org.thunderdog.challegram.navigation.ViewPagerHeaderViewCompact;
+import org.thunderdog.challegram.navigation.ViewPagerTopView;
 import org.thunderdog.challegram.support.RippleSupport;
 import org.thunderdog.challegram.support.ViewSupport;
 import org.thunderdog.challegram.telegram.ChatListListener;
+import org.thunderdog.challegram.telegram.ChatFoldersListener;
+import org.thunderdog.challegram.telegram.CounterChangeListener;
+import org.thunderdog.challegram.telegram.GlobalCountersListener;
 import org.thunderdog.challegram.telegram.RightId;
 import org.thunderdog.challegram.telegram.TGLegacyManager;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibChatList;
 import org.thunderdog.challegram.telegram.TdlibChatListSlice;
+import org.thunderdog.challegram.telegram.TdlibCounter;
 import org.thunderdog.challegram.telegram.TdlibFilesManager;
+import org.thunderdog.challegram.telegram.TdlibSettingsManager;
 import org.thunderdog.challegram.telegram.TdlibUi;
 import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.ColorState;
@@ -101,8 +109,10 @@ import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.tool.Views;
 import org.thunderdog.challegram.unsorted.AppContext;
 import org.thunderdog.challegram.unsorted.Settings;
+import org.thunderdog.challegram.unsorted.Size;
 import org.thunderdog.challegram.util.HapticMenuHelper;
 import org.thunderdog.challegram.util.StringList;
+import org.thunderdog.challegram.util.text.Counter;
 import org.thunderdog.challegram.util.text.Text;
 import org.thunderdog.challegram.v.CustomRecyclerView;
 import org.thunderdog.challegram.v.RtlGridLayoutManager;
@@ -116,6 +126,8 @@ import org.thunderdog.challegram.widget.PopupLayout;
 import org.thunderdog.challegram.widget.SeparatorView;
 import org.thunderdog.challegram.widget.TextFormattingLayout;
 import org.thunderdog.challegram.widget.VerticalChatView;
+import org.thunderdog.challegram.widget.ViewPager;
+import org.thunderdog.challegram.widget.rtl.RtlViewPager;
 
 import java.io.File;
 import java.io.FileWriter;
@@ -152,7 +164,9 @@ public class ShareController extends TelegramViewController<ShareController.Args
   FactorAnimator.Target, Runnable, PopupLayout.PopupHeightProvider,
   View.OnClickListener, Menu, PopupLayout.TouchSectionProvider,
   EmojiLayout.Listener, BaseView.ActionListProvider, EmojiToneHelper.Delegate,
-  ChatListListener, Filter<TdApi.Chat>, InputView.SelectionChangeListener {
+  ChatListListener, Filter<TdApi.Chat>, InputView.SelectionChangeListener,
+  ChatFoldersListener, CounterChangeListener, GlobalCountersListener,
+  TdlibSettingsManager.ChatListPositionListener, Settings.ChatFolderSettingsListener {
   private static final int MODE_MESSAGES = 0;
   private static final int MODE_TEXT = 1;
   private static final int MODE_GAME = 2;
@@ -804,7 +818,7 @@ public class ShareController extends TelegramViewController<ShareController.Args
               textRes = R.string.ShareTextPlain;
               break;
             default:
-              Td.assertMessageContent_f7758f8b();
+              Td.assertMessageContent_cc875c63();
               title1Res = R.string.ShareTitleMedia;
               title2Res = R.string.ShareTitleMediaX;
               textRes = R.string.ShareTextMedia;
@@ -1015,143 +1029,34 @@ public class ShareController extends TelegramViewController<ShareController.Args
     headerCell.initWithMargin(Screen.dp(56f) * getMenuItemCount(), false);
     headerCell.setThemedTextColor(ColorId.text, ColorId.textLight, this);
     updateHeader();
-    if (Settings.instance().chatFoldersEnabled() && TD.isChatListMain(displayingChatList) && tdlib.chatFolderCount() > 0) {
-      headerCell.setTitle(R.string.CategoryMain);
-      headerCell.setTitleIcon(R.drawable.baseline_keyboard_arrow_down_20);
-      headerCell.setOnClickListener(v -> {
-        if (!inSearchMode()) {
-          showFolderSelector();
-        }
-      });
-      Views.setClickable(headerCell);
-    }
+    createFolderTabs(context);
 
     contentView = new RelativeLayout(context);
     contentView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     // rootLayout.addView(contentView);
 
     RelativeLayout.LayoutParams params = new RelativeLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-    params.topMargin = HeaderView.getSize(true);
+    params.topMargin = HeaderView.getSize(true) + getFolderTabsHeight();
     if (canShareLink) {
       params.addRule(RelativeLayout.ABOVE, R.id.btn_send);
     }
-    recyclerView = new CustomRecyclerView(context) {
+    folderPager = new RtlViewPager(context) {
       @Override
-      public boolean onTouchEvent (MotionEvent e) {
-        return !(e.getAction() == MotionEvent.ACTION_DOWN && headerView != null && e.getY() < headerView.getTranslationY() - HeaderView.getSize(true)) && super.onTouchEvent(e);
-      }
-
-      @Override
-      protected void onLayout (boolean changed, int l, int t, int r, int b) {
-        super.onLayout(changed, l, t, r, b);
-        post(ShareController.this);
-        if (getAdapter() != null) {
-          launchOpenAnimation();
+      public boolean dispatchTouchEvent (MotionEvent e) {
+        // The pager fills the transparent space above the collapsed sheet too.
+        // Reject the initial touch there so PopupLayout can dismiss the sheet.
+        if (e.getActionMasked() == MotionEvent.ACTION_DOWN && headerView != null &&
+            e.getY() + getY() < headerView.getY()) {
+          return false;
         }
-        checkHeaderPosition();
-        if (awaitLayout) {
-          awaitLayout = false;
-          autoScroll(awaitScrollBy);
-        }
-        launchExpansionAnimation();
-      }
-
-      @Override
-      public void draw (Canvas c) {
-        int top = detectTopRecyclerEdge();
-        if (top == 0) {
-          c.drawColor(Theme.fillingColor());
-        } else {
-          c.drawRect(0, top, getMeasuredWidth(), getMeasuredHeight(), Paints.fillingPaint(Theme.fillingColor()));
-        }
-        super.draw(c);
-      }
-
-      @Override
-      protected void onMeasure (int widthSpec, int heightSpec) {
-        super.onMeasure(widthSpec, heightSpec);
-        if (getAdapter() != null) {
-          launchOpenAnimation();
-        }
-        checkHeaderPosition();
+        return super.dispatchTouchEvent(e);
       }
     };
-    addThemeInvalidateListener(recyclerView);
-    recyclerView.setItemAnimator(null);
-    recyclerView.setClipToPadding(false);
-    recyclerView.setOverScrollMode(View.OVER_SCROLL_NEVER);
-    recyclerView.addOnScrollListener(new RecyclerView.OnScrollListener() {
-      @Override
-      public void onScrollStateChanged (@NonNull RecyclerView recyclerView, int newState) {
-        if (newState == RecyclerView.SCROLL_STATE_IDLE) {
-          setAutoScrollFinished(true);
-        } else if (newState == RecyclerView.SCROLL_STATE_DRAGGING) {
-          resetTopEnsuredState();
-          hideSoftwareKeyboard();
-        }
-      }
+    folderPager.setLayoutParams(params);
+    contentView.addView(folderPager);
+    ShareChatPage initialPage = getOrCreateChatPage(displayingChatList);
+    activateChatPage(initialPage);
 
-      @Override
-      public void onScrolled (@NonNull RecyclerView recyclerView, int dx, int dy) {
-        checkHeaderPosition();
-        TdlibChatListSlice displayingList = getDisplayingList();
-        if (displayingList != null && displayingList.canLoad() && !inSearchMode()) {
-          GridLayoutManager gridManager = (GridLayoutManager) recyclerView.getLayoutManager();
-          int i = gridManager.findLastVisibleItemPosition();
-          if (i >= adapter.getItemCount() - gridManager.getSpanCount()) {
-            displayingList.loadMore(30, null);
-          }
-        }
-      }
-    });
-    recyclerView.setHasFixedSize(true);
-    recyclerView.setLayoutManager(new RtlGridLayoutManager(context, 4));
-    recyclerView.setLayoutParams(params);
-
-    final GridLayoutManager.SpanSizeLookup lookup = new GridLayoutManager.SpanSizeLookup() {
-      @Override
-      public int getSpanSize (int position) {
-        return adapter.getItems().get(position).getViewType() == ListItem.TYPE_CHAT_VERTICAL_FULLWIDTH ? 1 : ((GridLayoutManager) recyclerView.getLayoutManager()).getSpanCount();
-      }
-    };
-    decoration = new GridSpacingItemDecoration(calculateSpanCount(), Screen.dp(HORIZONTAL_PADDING_SIZE), true, false, false);
-    /*decoration.setNeedDraw(true, SettingItem.TYPE_CHAT_VERTICAL_FULLWIDTH);
-    decoration.setDrawColorId(ColorId.filling);*/
-    decoration.setSpanSizeLookup(lookup);
-    recyclerView.addItemDecoration(decoration);
-    recyclerView.addItemDecoration(new RecyclerView.ItemDecoration() {
-      @Override
-      public void getItemOffsets (@NonNull Rect outRect, @NonNull View view, @NonNull RecyclerView parent, @NonNull RecyclerView.State state) {
-        outRect.top = 0;
-        outRect.bottom = 0;
-        int i = parent.getChildAdapterPosition(view);
-        if (i != RecyclerView.NO_POSITION) {
-          int spanCount = ((GridLayoutManager) parent.getLayoutManager()).getSpanCount();
-          if (i < spanCount) {
-            int totalSpanCount = 0;
-            for (int pos = 0; pos < i && totalSpanCount <= spanCount; pos++) {
-              totalSpanCount += lookup.getSpanSize(pos);
-            }
-            if (i <= spanCount) {
-              outRect.top = getContentOffset();
-            }
-          }
-          final int itemCount = adapter.getItemCount();
-          int addSize = itemCount % spanCount;
-          if (addSize == 0)
-            addSize = spanCount;
-          if (i >= itemCount - addSize) {
-            int rowCount = (int) Math.ceil((float) itemCount / (float) spanCount);
-            int itemsHeight = rowCount * Screen.dp(86f) + Screen.dp(HORIZONTAL_PADDING_SIZE) + Screen.dp(VERTICAL_PADDING_SIZE);
-            outRect.bottom = Math.max(0, getValue().getMeasuredHeight() == 0 ? Screen.currentHeight() : getValue().getMeasuredHeight() - HeaderView.getSize(true) - itemsHeight - (canShareLink ? Screen.dp(56f) + extraBottomInset : 0));
-          }
-        }
-      }
-    });
-
-    ((GridLayoutManager) recyclerView.getLayoutManager()).setSpanSizeLookup(lookup);
-
-    contentView.addView(recyclerView);
 
     params = new RelativeLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Screen.dp(56f) + extraBottomInset);
     params.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM);
@@ -1416,17 +1321,7 @@ public class ShareController extends TelegramViewController<ShareController.Args
     bottomShadow.setLayoutParams(params);
     contentView.addView(bottomShadow);
 
-    adapter = new SettingsAdapter(this) {
-      @Override
-      protected void setChatData (ListItem item, VerticalChatView chatView) {
-        TGFoundChat chat = (TGFoundChat) item.getData();
-        chatView.setPreviewActionListProvider(ShareController.this);
-        chatView.setChat(chat);
-        chatView.setIsChecked(isChecked(chat.getAnyId()), false);
-      }
-    };
-    adapter.setNoEmptyProgress();
-    TGLegacyManager.instance().addEmojiListener(adapter);
+
 
     headerView = new HeaderView(context);
     headerView.initWithSingleController(this, false);
@@ -1446,6 +1341,9 @@ public class ShareController extends TelegramViewController<ShareController.Args
     wrapView.addView(contentView);
     chatSearchView = generateChatSearchView(wrapView);
     ((ViewGroup.MarginLayoutParams) chatSearchView.getLayoutParams()).topMargin = HeaderView.getSize(true);
+    if (folderTabs != null) {
+      wrapView.addView(folderTabs);
+    }
     wrapView.addView(headerView);
     if (HeaderView.getTopOffset() > 0) {
       lickView = new LickView(context);
@@ -1462,9 +1360,264 @@ public class ShareController extends TelegramViewController<ShareController.Args
 
     // Load chats
 
-    initializeChatList(displayingChatList);
+    folderPagerAdapter = new SharePagerAdapter();
+    folderPager.setAdapter(folderPagerAdapter);
+    folderPager.addOnPageChangeListener(new ViewPager.OnPageChangeListener() {
+      @Override
+      public void onPageScrolled (int position, float offset, int pixels) {
+        folderTabs.getTopView().setSelectionFactor(position + ViewPager.clampPositionOffset(offset));
+      }
+
+      @Override
+      public void onPageSelected (int position) {
+        if (rebuildingPager)
+          return;
+        displayChatList(pagerChatLists.get(position));
+      }
+
+      @Override
+      public void onPageScrollStateChanged (int state) {
+        if (state == ViewPager.SCROLL_STATE_DRAGGING) {
+          prepareFolderPaging();
+          hideSoftwareKeyboard();
+        }
+      }
+    });
+    updateFolderSelection();
+    ensureChatPageLoaded(initialPage);
 
     return wrapView;
+  }
+
+  private RtlViewPager folderPager;
+  private SharePagerAdapter folderPagerAdapter;
+  private boolean rebuildingPager;
+  private List<TdApi.ChatList> pagerChatLists = new ArrayList<>();
+  private final Map<String, ShareChatPage> chatPages = new HashMap<>();
+
+  private final class ShareChatPage {
+    final TdApi.ChatList chatList;
+    final SettingsAdapter adapter;
+    final CustomRecyclerView recyclerView;
+    final GridSpacingItemDecoration decoration;
+
+    ShareChatPage (Context context, TdApi.ChatList chatList) {
+      this.chatList = chatList;
+      adapter = new SettingsAdapter(ShareController.this) {
+        @Override
+        protected View createModifiedView (ViewGroup parent, int viewType, View view) {
+          if (viewType == ListItem.TYPE_ICONIZED_EMPTY) {
+            // Reuse the chat list's icon and text without its full-screen centering:
+            // this sheet also reserves space above the row for the collapsed header.
+            ViewGroup centeredWrap = (ViewGroup) view;
+            View content = centeredWrap.getChildAt(0);
+            centeredWrap.removeView(content);
+            FrameLayoutFix wrap = new FrameLayoutFix(context);
+            wrap.addView(content);
+            return wrap;
+          }
+          return null;
+        }
+
+        @Override
+        protected void setChatData (ListItem item, VerticalChatView chatView) {
+          TGFoundChat chat = (TGFoundChat) item.getData();
+          chatView.setPreviewActionListProvider(ShareController.this);
+          chatView.setChat(chat);
+          chatView.setIsChecked(isChecked(chat.getAnyId()), false);
+        }
+      };
+      adapter.setNoEmptyProgress();
+      TGLegacyManager.instance().addEmojiListener(adapter);
+      recyclerView = new CustomRecyclerView(context) {
+        @Override
+        public boolean onTouchEvent (MotionEvent e) {
+          return !(e.getAction() == MotionEvent.ACTION_DOWN && headerView != null && e.getY() < headerView.getTranslationY() - HeaderView.getSize(true) - getFolderTabsHeight()) && super.onTouchEvent(e);
+        }
+
+        @Override
+        protected void onLayout (boolean changed, int l, int t, int r, int b) {
+          super.onLayout(changed, l, t, r, b);
+          if (recyclerView != ShareController.this.recyclerView) {
+            return;
+          }
+          post(ShareController.this);
+          checkHeaderPosition();
+          if (awaitLayout) {
+            awaitLayout = false;
+            autoScroll(awaitScrollBy);
+          }
+          launchExpansionAnimation();
+        }
+
+        @Override
+        public void draw (Canvas c) {
+          int top = detectTopRecyclerEdge(recyclerView);
+          if (top == 0) {
+            c.drawColor(Theme.fillingColor());
+          } else {
+            c.drawRect(0, top, getMeasuredWidth(), getMeasuredHeight(), Paints.fillingPaint(Theme.fillingColor()));
+          }
+          super.draw(c);
+        }
+
+        @Override
+        protected void onMeasure (int widthSpec, int heightSpec) {
+          super.onMeasure(widthSpec, heightSpec);
+          if (recyclerView == ShareController.this.recyclerView) {
+            checkHeaderPosition();
+          }
+        }
+      };
+      addThemeInvalidateListener(recyclerView);
+      recyclerView.setItemAnimator(null);
+      recyclerView.setClipToPadding(false);
+      recyclerView.setOverScrollMode(View.OVER_SCROLL_NEVER);
+      recyclerView.addOnScrollListener(new RecyclerView.OnScrollListener() {
+        @Override
+        public void onScrollStateChanged (@NonNull RecyclerView recyclerView, int newState) {
+          if (recyclerView != ShareController.this.recyclerView)
+            return;
+          if (newState == RecyclerView.SCROLL_STATE_IDLE) {
+            setAutoScrollFinished(true);
+          } else if (newState == RecyclerView.SCROLL_STATE_DRAGGING) {
+            resetTopEnsuredState();
+            hideSoftwareKeyboard();
+          }
+        }
+
+        @Override
+        public void onScrolled (@NonNull RecyclerView recyclerView, int dx, int dy) {
+          if (recyclerView != ShareController.this.recyclerView)
+            return;
+          checkHeaderPosition();
+          TdlibChatListSlice displayingList = getDisplayingList();
+          if (displayingList != null && displayingList.canLoad() && !inSearchMode()) {
+            GridLayoutManager gridManager = (GridLayoutManager) recyclerView.getLayoutManager();
+            int i = gridManager.findLastVisibleItemPosition();
+            if (i >= adapter.getItemCount() - gridManager.getSpanCount()) {
+              displayingList.loadMore(30, null);
+            }
+          }
+        }
+      });
+      recyclerView.setHasFixedSize(true);
+      recyclerView.setLayoutManager(new RtlGridLayoutManager(context, calculateSpanCount()));
+      recyclerView.setLayoutParams(new ViewPager.LayoutParams());
+
+      final GridLayoutManager.SpanSizeLookup lookup = new GridLayoutManager.SpanSizeLookup() {
+        @Override
+        public int getSpanSize (int position) {
+          return adapter.getItems().get(position).getViewType() == ListItem.TYPE_CHAT_VERTICAL_FULLWIDTH ? 1 : ((GridLayoutManager) recyclerView.getLayoutManager()).getSpanCount();
+        }
+      };
+      decoration = new GridSpacingItemDecoration(calculateSpanCount(), Screen.dp(HORIZONTAL_PADDING_SIZE), true, false, false);
+      /*decoration.setNeedDraw(true, SettingItem.TYPE_CHAT_VERTICAL_FULLWIDTH);
+      decoration.setDrawColorId(ColorId.filling);*/
+      decoration.setSpanSizeLookup(lookup);
+      recyclerView.addItemDecoration(decoration);
+      recyclerView.addItemDecoration(new RecyclerView.ItemDecoration() {
+        @Override
+        public void getItemOffsets (@NonNull Rect outRect, @NonNull View view, @NonNull RecyclerView parent, @NonNull RecyclerView.State state) {
+          outRect.top = 0;
+          outRect.bottom = 0;
+          int i = parent.getChildAdapterPosition(view);
+          if (i != RecyclerView.NO_POSITION) {
+            int spanCount = ((GridLayoutManager) parent.getLayoutManager()).getSpanCount();
+            if (i < spanCount) {
+              int totalSpanCount = 0;
+              for (int pos = 0; pos < i && totalSpanCount <= spanCount; pos++) {
+                totalSpanCount += lookup.getSpanSize(pos);
+              }
+              if (i <= spanCount) {
+                outRect.top = getContentOffset();
+              }
+            }
+            final int itemCount = adapter.getItemCount();
+            int addSize = itemCount % spanCount;
+            if (addSize == 0)
+              addSize = spanCount;
+            if (i >= itemCount - addSize) {
+              int rowCount = (int) Math.ceil((float) itemCount / (float) spanCount);
+              int itemsHeight = rowCount * Screen.dp(86f) + Screen.dp(HORIZONTAL_PADDING_SIZE) + Screen.dp(VERTICAL_PADDING_SIZE);
+              outRect.bottom = Math.max(0, getValue().getMeasuredHeight() == 0 ? Screen.currentHeight() : getValue().getMeasuredHeight() - HeaderView.getSize(true) - getFolderTabsHeight() - itemsHeight - (canShareLink ? Screen.dp(56f) + extraBottomInset : 0));
+            }
+          }
+        }
+      });
+
+      ((GridLayoutManager) recyclerView.getLayoutManager()).setSpanSizeLookup(lookup);
+      if (ShareController.this.recyclerView != null) {
+        recyclerView.setPadding(0, 0, 0, ShareController.this.recyclerView.getPaddingBottom());
+      }
+      recyclerView.setAdapter(adapter);
+    }
+  }
+
+  private ShareChatPage getOrCreateChatPage (TdApi.ChatList chatList) {
+    String key = TD.makeChatListKey(chatList);
+    ShareChatPage page = chatPages.get(key);
+    if (page == null) {
+      page = new ShareChatPage(context, chatList);
+      chatPages.put(key, page);
+      refreshChatPage(page);
+    }
+    return page;
+  }
+
+  private void activateChatPage (ShareChatPage page) {
+    displayingChatList = page.chatList;
+    recyclerView = page.recyclerView;
+    adapter = page.adapter;
+    decoration = page.decoration;
+    lastFirstView = null;
+  }
+
+  private void ensureChatPageLoaded (ShareChatPage page) {
+    if (getListByChatList(page.chatList) == null) {
+      initializeChatList(page.chatList);
+    }
+  }
+
+  private final class SharePagerAdapter extends PagerAdapter {
+    @Override
+    public int getCount () {
+      return pagerChatLists.size();
+    }
+
+    @Override
+    public boolean isViewFromObject (@NonNull View view, @NonNull Object object) {
+      return view == ((ShareChatPage) object).recyclerView;
+    }
+
+    @Override
+    public int getItemPosition (@NonNull Object object) {
+      TdApi.ChatList list = ((ShareChatPage) object).chatList;
+      for (int i = 0; i < pagerChatLists.size(); i++) {
+        if (Td.equalsTo(list, pagerChatLists.get(i))) {
+          return i;
+        }
+      }
+      return POSITION_NONE;
+    }
+
+    @NonNull
+    @Override
+    public Object instantiateItem (@NonNull ViewGroup container, int position) {
+      ShareChatPage page = getOrCreateChatPage(pagerChatLists.get(position));
+      if (page.recyclerView != recyclerView && headerView != null) {
+        ((GridLayoutManager) page.recyclerView.getLayoutManager()).scrollToPositionWithOffset(0,
+          getTopEdge() + Screen.dp(VERTICAL_PADDING_SIZE) - getContentOffset());
+      }
+      container.addView(page.recyclerView);
+      ensureChatPageLoaded(page);
+      return page;
+    }
+
+    @Override
+    public void destroyItem (@NonNull ViewGroup container, int position, @NonNull Object object) {
+      container.removeView(((ShareChatPage) object).recyclerView);
+    }
   }
 
   private void reloadMessageProperties (@Nullable RunnableData<TdApi.MessageProperties[]> after) {
@@ -1526,8 +1679,12 @@ public class ShareController extends TelegramViewController<ShareController.Args
     /**/
     // FIXME replace Math.max with proper fix.
     int startLoadCount = Math.max(20, Screen.calculateLoadingItems(Screen.dp(95f), 1) * calculateSpanCount());
-    list.initializeList(this, entries -> processChats(list.chatList(), entries), startLoadCount, this::executeScheduledAnimation);
     bindListToChatList(chatList, list);
+    list.initializeList(this, entries -> processChats(list.chatList(), entries), startLoadCount,
+      () -> runOnUiThreadOptional(() -> {
+        refreshChatPage(chatPages.get(TD.makeChatListKey(chatList)));
+        executeScheduledAnimation();
+      }));
   }
 
   private boolean isDisplayingChatList (@Nullable TdApi.ChatList chatList) {
@@ -1560,6 +1717,9 @@ public class ShareController extends TelegramViewController<ShareController.Args
         displayingChats.remove(fromIndex);
         if (isDisplayingChatList(chatList.chatList())) {
           adapter.removeItem(fromIndex);
+          if (displayingChats.isEmpty()) {
+            refreshChatPage(chatPages.get(TD.makeChatListKey(chatList.chatList())));
+          }
           recyclerView.invalidateItemDecorations();
         }
       }
@@ -1672,6 +1832,10 @@ public class ShareController extends TelegramViewController<ShareController.Args
   }
 
   private int detectTopRecyclerEdge () {
+    return detectTopRecyclerEdge(recyclerView);
+  }
+
+  private int detectTopRecyclerEdge (RecyclerView recyclerView) {
     GridLayoutManager manager = (GridLayoutManager) recyclerView.getLayoutManager();
     int first = manager.findFirstVisibleItemPosition();
     int spanCount = manager.getSpanCount();
@@ -1795,13 +1959,16 @@ public class ShareController extends TelegramViewController<ShareController.Args
     }
     int top = HeaderView.getTopOffset();
     if (view != null) {
-      top = Math.max(view.getTop() - HeaderView.getSize(false) + recyclerView.getTop() - Screen.dp(VERTICAL_PADDING_SIZE), HeaderView.getTopOffset());
+      top = Math.max(view.getTop() - HeaderView.getSize(false) - getFolderTabsHeight() + folderPager.getTop() - Screen.dp(VERTICAL_PADDING_SIZE), HeaderView.getTopOffset());
     }
     if (!appliedRecyclerMargin && expandFactor != 0f) {
       top = Math.max(HeaderView.getTopOffset(), (int) (top + calculateRecyclerOffset()));
     }
     if (headerView != null) {
       headerView.setTranslationY(top);
+      if (folderTabs != null) {
+        folderTabs.setTranslationY(top);
+      }
       fixView.setTranslationY(top);
       final int topOffset = HeaderView.getTopOffset();
       top -= topOffset;
@@ -1818,13 +1985,6 @@ public class ShareController extends TelegramViewController<ShareController.Args
         needUpdateSearchMode = false;
       } else if (autoScrollFinished && top > 0 && inSearchMode() && getSearchTransformFactor() == 1f) {
         recyclerView.scrollBy(0, top);
-      }
-      if (folderSelectorLayout != null) {
-        View boundView = folderSelectorLayout.getBoundView();
-        if (boundView != null && boundView.getTranslationY() != headerView.getTranslationY()) {
-          boundView.setTranslationY(headerView.getTranslationY());
-          boundView.requestLayout();
-        }
       }
     }
   }
@@ -2046,6 +2206,14 @@ public class ShareController extends TelegramViewController<ShareController.Args
     }
     checkAbilityToSend();
     updateHeader();
+    for (ShareChatPage page : chatPages.values()) {
+      if (page.adapter != adapter) {
+        int index = page.adapter.indexOfViewByLongId(chatId);
+        if (index != -1) {
+          page.adapter.notifyItemChanged(index);
+        }
+      }
+    }
     if (after != null) {
       after.runWithBool(result);
     }
@@ -2297,11 +2465,13 @@ public class ShareController extends TelegramViewController<ShareController.Args
   @Override
   public void run () {
     int spanCount = calculateSpanCount();
-    GridLayoutManager manager = (GridLayoutManager) recyclerView.getLayoutManager();
-    if (manager.getSpanCount() != spanCount) {
-      manager.setSpanCount(spanCount);
-      decoration.setSpanCount(spanCount);
-      recyclerView.invalidateItemDecorations();
+    for (ShareChatPage page : chatPages.values()) {
+      GridLayoutManager manager = (GridLayoutManager) page.recyclerView.getLayoutManager();
+      if (manager.getSpanCount() != spanCount) {
+        manager.setSpanCount(spanCount);
+        page.decoration.setSpanCount(spanCount);
+        page.recyclerView.invalidateItemDecorations();
+      }
     }
   }
 
@@ -2324,13 +2494,16 @@ public class ShareController extends TelegramViewController<ShareController.Args
   @Override
   protected void onEnterSearchMode () {
     super.onEnterSearchMode();
+    folderPager.setPagingEnabled(false);
     final int top = getTopEdge();
     if (top > 0) {
       awaitingChatSearchOpen = top;
     } else {
       setAutoScrollFinished(true);
     }
-    hideFolderSelector();
+    if (folderTabs != null) {
+      folderTabs.setVisibility(View.INVISIBLE);
+    }
   }
 
   private void setAutoScrollFinished (boolean isFinished) {
@@ -2357,6 +2530,10 @@ public class ShareController extends TelegramViewController<ShareController.Args
   @Override
   protected void onLeaveSearchMode () {
     super.onLeaveSearchMode();
+    folderPager.setPagingEnabled(true);
+    if (folderTabs != null) {
+      folderTabs.setVisibility(getFolderTabsHeight() > 0 ? View.VISIBLE : View.GONE);
+    }
     if (preventAutoScroll) {
       preventAutoScroll = false;
       setAutoScrollFinished(true);
@@ -2508,13 +2685,18 @@ public class ShareController extends TelegramViewController<ShareController.Args
     popupLayout.setIgnoreHorizontal();
     getValue();
     context().addFullScreenView(this, false);
+    // Pager pages cannot be measured until the popup is attached. Show the
+    // prepared loading state now instead of waiting for a page layout or data.
+    launchOpenAnimation();
   }
 
   @Override
   public void dispatchSystemInsets (View parentView, ViewGroup.MarginLayoutParams originalParams, Rect legacyInsets, Rect insets, Rect insetsWithoutIme, Rect systemInsets, Rect systemInsetsWithoutIme, boolean fitsSystemWindows) {
     super.dispatchSystemInsets(parentView, originalParams, legacyInsets, insets, insetsWithoutIme, systemInsets, systemInsetsWithoutIme, fitsSystemWindows);
     originalParams.bottomMargin = 0;
-    recyclerView.setPadding(0, 0, 0, insets.bottom);
+    for (ShareChatPage page : chatPages.values()) {
+      page.recyclerView.setPadding(0, 0, 0, insets.bottom);
+    }
     setBottomInset(insets.bottom, insetsWithoutIme.bottom);
   }
 
@@ -2578,25 +2760,52 @@ public class ShareController extends TelegramViewController<ShareController.Args
     chatsByChatList.put(TD.makeChatListKey(chatList), chats);
   }
 
-  private void displayChatList (CharSequence title, TdApi.ChatList chatList) {
+  private void displayChatList (TdApi.ChatList chatList) {
     if (isDisplayingChatList(chatList))
       return;
-    headerCell.setTitle(StringUtils.isEmptyOrBlank(title) ? getName() : title);
-    displayingChatList = chatList;
-    if (getListByChatList(chatList) != null) {
-      List<TGFoundChat> chats = getChatsByChatList(chatList);
-      if (chats != null && !chats.isEmpty()) {
-        List<ListItem> items = new ArrayList<>(chats.size());
-        addCells(chats, items);
-        adapter.setItems(items, false);
-      } else {
-        adapter.setItems(Collections.singletonList(emptyItem()), false);
-      }
+    int top = getTopEdge() + Screen.dp(VERTICAL_PADDING_SIZE) - getContentOffset();
+    recyclerView.stopScroll();
+    ShareChatPage page = getOrCreateChatPage(chatList);
+    activateChatPage(page);
+    refreshChatPage(page);
+    recyclerView.setScrollDisabled(!autoScrollFinished);
+    ((GridLayoutManager) recyclerView.getLayoutManager()).scrollToPositionWithOffset(0, top);
+    ensureChatPageLoaded(page);
+  }
+
+  private void refreshChatPage (@Nullable ShareChatPage page) {
+    if (page == null)
+      return;
+    List<TGFoundChat> chats = getChatsByChatList(page.chatList);
+    List<ListItem> items = new ArrayList<>();
+    if (chats != null && !chats.isEmpty()) {
+      addCells(chats, items);
     } else {
-      adapter.setItems(Collections.singletonList(emptyItem()), false);
-      initializeChatList(chatList);
+      TdlibChatListSlice list = getListByChatList(page.chatList);
+      if (list == null || list.needProgressPlaceholder()) {
+        items.add(new ListItem(ListItem.TYPE_PROGRESS, android.R.id.empty));
+      } else {
+        items.add(new ListItem(ListItem.TYPE_ICONIZED_EMPTY, android.R.id.empty,
+          R.drawable.baseline_folder_open_96,
+          Lang.getMarkdownString(this, R.string.ShareFolderNoChats)));
+      }
     }
-    recyclerView.invalidateItemDecorations();
+    page.adapter.setItems(items, false);
+    page.recyclerView.invalidateItemDecorations();
+  }
+
+  @Override
+  public void onChatListStateChanged (TdlibChatList chatList, int newState, int oldState) {
+    runOnUiThreadOptional(() -> refreshChatPage(chatPages.get(TD.makeChatListKey(chatList.chatList()))));
+  }
+
+  @Override
+  public void onChatListChanged (TdlibChatList chatList, int flags) {
+    runOnUiThreadOptional(() -> {
+      if (!isDisplayingChatList(chatList.chatList())) {
+        refreshChatPage(chatPages.get(TD.makeChatListKey(chatList.chatList())));
+      }
+    });
   }
 
   private void displayChats (TdApi.ChatList chatList, List<TGFoundChat> chats) {
@@ -2608,22 +2817,19 @@ public class ShareController extends TelegramViewController<ShareController.Args
       displayingChats.addAll(chats);
     }
 
-    if (isDisplayingChatList(chatList)) {
+    if (chats.isEmpty() || !isDisplayingChatList(chatList)) {
+      refreshChatPage(chatPages.get(TD.makeChatListKey(chatList)));
+    } else {
       if (isEmptyItem(adapter.getItem(0))) {
         adapter.getItems().remove(0);
         adapter.notifyItemRemoved(0);
       }
       final int startIndex = adapter.getItems().size();
       addCells(chats, adapter.getItems());
-      if (recyclerView.getAdapter() == null) {
-        recyclerView.setAdapter(adapter);
-        launchOpenAnimation();
-      } else {
-        int newItemCount = adapter.getItems().size() - startIndex;
-        if (newItemCount > 0) {
-          adapter.notifyItemRangeInserted(startIndex, newItemCount);
-          recyclerView.invalidateItemDecorations();
-        }
+      int newItemCount = adapter.getItems().size() - startIndex;
+      if (newItemCount > 0) {
+        adapter.notifyItemRangeInserted(startIndex, newItemCount);
+        recyclerView.invalidateItemDecorations();
       }
     }
   }
@@ -2640,10 +2846,6 @@ public class ShareController extends TelegramViewController<ShareController.Args
 
   private static ListItem valueOfChat (TGFoundChat chat) {
     return new ListItem(ListItem.TYPE_CHAT_VERTICAL_FULLWIDTH, R.id.chat).setData(chat).setLongId(chat.getAnyId());
-  }
-
-  private static ListItem emptyItem () {
-    return new ListItem(ListItem.TYPE_PADDING, android.R.id.empty).setHeight(Screen.dp(86f) + Screen.dp(VERTICAL_PADDING_SIZE));
   }
 
   private static boolean isEmptyItem (@Nullable ListItem item) {
@@ -2835,7 +3037,7 @@ public class ShareController extends TelegramViewController<ShareController.Args
     if (this.expandFactor != factor) {
       this.expandFactor = factor;
       float y = calculateRecyclerOffset();
-      recyclerView.setTranslationY(y);
+      folderPager.setTranslationY(y);
       checkCommentPosition();
       checkHeaderPosition();
       if (!canShareLink) {
@@ -2913,9 +3115,9 @@ public class ShareController extends TelegramViewController<ShareController.Args
   private void setAppliedRecyclerMargin (boolean isApplied) {
     if (this.appliedRecyclerMargin != isApplied) {
       this.appliedRecyclerMargin = isApplied;
-      recyclerView.setTranslationY(calculateRecyclerOffset());
-      ((RelativeLayout.LayoutParams) recyclerView.getLayoutParams()).addRule(RelativeLayout.ABOVE, isApplied ? R.id.share_bottom : canShareLink ? R.id.btn_send : 0);
-      recyclerView.setLayoutParams(recyclerView.getLayoutParams());
+      folderPager.setTranslationY(calculateRecyclerOffset());
+      ((RelativeLayout.LayoutParams) folderPager.getLayoutParams()).addRule(RelativeLayout.ABOVE, isApplied ? R.id.share_bottom : canShareLink ? R.id.btn_send : 0);
+      folderPager.setLayoutParams(folderPager.getLayoutParams());
       recyclerView.invalidateItemDecorations();
       if (ignoreRecyclerMovement && savedPosition == 0) {
         if (isApplied) {
@@ -3867,72 +4069,208 @@ public class ShareController extends TelegramViewController<ShareController.Args
     }
   }
 
-  private @Nullable PopupLayout folderSelectorLayout;
+  private ViewPagerHeaderViewCompact folderTabs;
+  private final List<TdApi.ChatList> folderChatLists = new ArrayList<>();
+  private final List<ViewPagerTopView.Item> folderItems = new ArrayList<>();
 
-  private static class FolderMenuWrap extends MenuMoreWrap {
-    public FolderMenuWrap (Context context) {
-      super(context, true);
-    }
+  private int getFolderTabsHeight () {
+    return folderChatLists.size() > 1 ? Size.getHeaderPortraitSize() : 0;
+  }
 
-    @Override
-    protected void onMeasure (int widthMeasureSpec, int heightMeasureSpec) {
-      int overrideHeightMeasureSpec;
-      int heightSpecMode = MeasureSpec.getMode(heightMeasureSpec);
-      if (heightSpecMode == MeasureSpec.UNSPECIFIED) {
-        overrideHeightMeasureSpec = heightMeasureSpec;
-      } else {
-        int heightSpecSize = Math.max(MeasureSpec.getSize(heightMeasureSpec) - Math.round(getTranslationY()), 0);
-        overrideHeightMeasureSpec = MeasureSpec.makeMeasureSpec(heightSpecSize, heightSpecMode);
+  private void createFolderTabs (Context context) {
+    folderTabs = new ViewPagerHeaderViewCompact(context);
+    folderTabs.setDistributeItems(true);
+    FrameLayout.LayoutParams params = FrameLayoutFix.newParams(
+      ViewGroup.LayoutParams.MATCH_PARENT, Size.getHeaderPortraitSize());
+    params.topMargin = HeaderView.getSize(false);
+    folderTabs.setLayoutParams(params);
+    ViewSupport.setThemedBackground(folderTabs, ColorId.filling, this);
+    ViewPagerTopView top = folderTabs.getTopView();
+    top.setSelectionColorId(ColorId.text);
+    top.setTextFromToColorId(ColorId.textLight, ColorId.text);
+    addThemeInvalidateListener(top);
+    top.setOnItemClickListener(index -> {
+      if (!inSearchMode() && index >= 0 && index < folderChatLists.size()) {
+        prepareFolderPaging();
+        folderPager.setCurrentItem(index, !Settings.instance().needReduceMotion());
       }
-      super.onMeasure(widthMeasureSpec, overrideHeightMeasureSpec);
-    }
-  }
-
-  private void showFolderSelector () {
-    if (headerView == null)
-      return;
-    FolderMenuWrap menu = new FolderMenuWrap(context);
-    menu.init(getThemeListeners(), null);
-    menu.addItem(0, Lang.getString(R.string.CategoryMain), R.drawable.baseline_forum_24, null, v -> {
-      PopupLayout popupLayout = PopupLayout.parentOf(v);
-      popupLayout.hideWindow(true);
-      displayChatList(Lang.getString(R.string.CategoryMain), ChatPosition.CHAT_LIST_MAIN);
     });
-    View.OnClickListener onItemClickListener = v -> {
-      PopupLayout popupLayout = PopupLayout.parentOf(v);
-      popupLayout.hideWindow(true);
-      TdApi.ChatFolderInfo chatFolderInfo = (TdApi.ChatFolderInfo) v.getTag();
-      displayChatList(TD.toCharSequence(chatFolderInfo.name), new TdApi.ChatListFolder(chatFolderInfo.id));
-    };
-    for (TdApi.ChatFolderInfo chatFolderInfo : tdlib.chatFolders()) {
-      View itemView = menu.addItem(View.NO_ID, TD.toCharSequence(chatFolderInfo.name), TD.findFolderIcon(chatFolderInfo.icon, R.drawable.baseline_folder_24), /* icon */ null, onItemClickListener);
-      itemView.setTag(chatFolderInfo);
-    }
-    menu.setAnchorMode(MenuMoreWrap.ANCHOR_MODE_HEADER);
-    menu.setTranslationY(headerView.getTranslationY());
-    folderSelectorLayout = new PopupLayout(context);
-    folderSelectorLayout.init(!Settings.instance().useEdgeToEdge());
-    folderSelectorLayout.setNeedRootInsets();
-    folderSelectorLayout.setOverlayStatusBar(true);
-    folderSelectorLayout.setDismissListener((popup) -> folderSelectorLayout = null);
-    folderSelectorLayout.showMoreView(menu);
+    rebuildFolderTabs(tdlib.chatFolders(), tdlib.mainChatListPosition());
+    tdlib.listeners().subscribeToChatFoldersUpdates(this);
+    tdlib.listeners().addTotalChatCounterListener(this);
+    tdlib.context().global().addCountersListener(this);
+    tdlib.settings().addChatListPositionListener(this);
+    Settings.instance().addChatFolderSettingsListener(this);
   }
 
-  private void hideFolderSelector () {
-    if (folderSelectorLayout != null) {
-      folderSelectorLayout.hideWindow(isFocused());
-      folderSelectorLayout = null;
+  private void rebuildFolderTabs (TdApi.ChatFolderInfo[] folders, int mainPosition) {
+    int oldHeight = getFolderTabsHeight();
+    folderChatLists.clear();
+    folderItems.clear();
+    List<TdApi.ChatFolderInfo> ordered = new ArrayList<>();
+    if (Settings.instance().chatFoldersEnabled()) {
+      Collections.addAll(ordered, folders);
+    }
+    ordered.add(Math.max(0, Math.min(mainPosition, ordered.size())), null);
+    int style = tdlib.settings().chatFolderStyle();
+    for (TdApi.ChatFolderInfo folder : ordered) {
+      if (folder != null && !tdlib.settings().isChatFolderEnabled(folder.id)) {
+        continue;
+      }
+      TdApi.ChatList list = folder != null ?
+        new TdApi.ChatListFolder(folder.id) : ChatPosition.CHAT_LIST_MAIN;
+      boolean firstMainTab = folder == null && folderChatLists.isEmpty();
+      CharSequence label = folder != null ? Emoji.instance().replaceEmoji(TD.toCharSequence(folder.name)) :
+        Lang.getString(R.string.CategoryMain);
+      if (!ChatFolderTab.hasLabel(style, firstMainTab)) {
+        label = null;
+      }
+      int icon = folder != null ? TD.findFolderIcon(folder.icon, R.drawable.baseline_folder_24) :
+        R.drawable.baseline_forum_24;
+      final int index = folderItems.size();
+      Counter counter = ChatFolderTab.buildCounter(() -> false, (changed, sizeChanged) -> {
+        if (sizeChanged) {
+          folderTabs.getTopView().requestItemLayoutAt(index);
+        }
+        folderTabs.getTopView().invalidate();
+      });
+      folderChatLists.add(list);
+      folderItems.add(ChatFolderTab.build(label, icon, style, firstMainTab, counter));
+    }
+    if (displayingChatList instanceof TdApi.ChatListArchive) {
+      folderChatLists.add(displayingChatList);
+      folderItems.add(ChatFolderTab.build(Lang.getString(R.string.CategoryArchive),
+        R.drawable.baseline_archive_24, style, false, null));
+    }
+    ChatFolderTab.configure(folderTabs, style, true, false);
+    folderTabs.getTopView().setItems(new ArrayList<>(folderItems));
+    updateFolderCounters();
+    rebuildingPager = true;
+    pagerChatLists = new ArrayList<>(folderChatLists);
+    if (folderPagerAdapter != null) {
+      folderPagerAdapter.notifyDataSetChanged();
+    }
+    updateFolderSelection();
+    rebuildingPager = false;
+    int height = getFolderTabsHeight();
+    folderTabs.setVisibility(height > 0 ? (inSearchMode() ? View.INVISIBLE : View.VISIBLE) : View.GONE);
+    if (folderPager != null && oldHeight != height) {
+      ((ViewGroup.MarginLayoutParams) folderPager.getLayoutParams()).topMargin =
+        HeaderView.getSize(true) + height;
+      folderPager.requestLayout();
+      for (ShareChatPage page : chatPages.values()) {
+        page.recyclerView.invalidateItemDecorations();
+      }
+    }
+  }
+
+  private void prepareFolderPaging () {
+    int top = getTopEdge() + Screen.dp(VERTICAL_PADDING_SIZE) - getContentOffset();
+    for (ShareChatPage page : chatPages.values()) {
+      page.recyclerView.stopScroll();
+      if (page.recyclerView != recyclerView) {
+        ((GridLayoutManager) page.recyclerView.getLayoutManager()).scrollToPositionWithOffset(0, top);
+      }
+    }
+  }
+
+  private void updateFolderSelection () {
+    for (int i = 0; i < pagerChatLists.size(); i++) {
+      if (isDisplayingChatList(pagerChatLists.get(i))) {
+        folderTabs.getTopView().setSelectionFactor(i);
+        if (folderPagerAdapter != null) {
+          folderPager.setCurrentItem(i, false);
+        }
+        return;
+      }
+    }
+    // A deleted or hidden folder must not leave an inaccessible filter active.
+    if (folderPagerAdapter != null) {
+      displayChatList(ChatPosition.CHAT_LIST_MAIN);
+      updateFolderSelection();
     }
   }
 
   @Override
+  public void onChatFoldersChanged (TdApi.ChatFolderInfo[] folders, int mainPosition) {
+    runOnUiThreadOptional(() -> rebuildFolderTabs(folders, mainPosition));
+  }
+
+  private void updateFolderCounters () {
+    for (int i = 0; i < folderItems.size(); i++) {
+      TdApi.ChatList list = folderChatLists.get(i);
+      Counter counter = folderItems.get(i).counter;
+      if (counter != null) {
+        MainController.updateCounter(tdlib, list, counter, tdlib.getCounter(list), isFocused());
+      }
+    }
+  }
+
+  @Override
+  public void onChatCounterChanged (@NonNull TdApi.ChatList list, TdlibCounter counter,
+    boolean availabilityChanged, int totalCount, int unreadCount, int unreadUnmutedCount) {
+    runOnUiThreadOptional(this::updateFolderCounters);
+  }
+
+  @Override
+  public void onMessageCounterChanged (@NonNull TdApi.ChatList list, TdlibCounter counter,
+    int unreadCount, int unreadUnmutedCount) {
+    runOnUiThreadOptional(this::updateFolderCounters);
+  }
+
+  @Override
+  public void onBadgeFlagsChanged (Tdlib source, int flags) {
+    runOnUiThreadOptional(this::updateFolderCounters);
+  }
+
+  @Override
+  public void onBadgeSettingsChanged () {
+    runOnUiThreadOptional(this::updateFolderCounters);
+  }
+
+  @Override
+  public void onChatFolderStyleChanged (Tdlib source, int style) {
+    onChatFolderStyleChanged(style);
+  }
+
+  @Override
+  public void onChatFolderStyleChanged (int style) {
+    onChatFoldersChanged(tdlib.chatFolders(), tdlib.mainChatListPosition());
+  }
+
+  @Override
+  public void onChatFolderOptionsChanged (int options) {
+    onChatFoldersChanged(tdlib.chatFolders(), tdlib.mainChatListPosition());
+  }
+
+  @Override
+  public void onChatListStateChanged (Tdlib source, TdApi.ChatList list, boolean enabled) {
+    onChatFoldersChanged(tdlib.chatFolders(), tdlib.mainChatListPosition());
+  }
+
+  @Override
   public void destroy () {
+    tdlib.listeners().unsubscribeFromChatFoldersUpdates(this);
+    tdlib.listeners().removeTotalChatCounterListener(this);
+    tdlib.context().global().removeCountersListener(this);
+    tdlib.settings().removeChatListPositionListener(this);
+    Settings.instance().removeChatFolderSettingsListener(this);
+    if (folderTabs != null) {
+      folderTabs.getTopView().performDestroy();
+      Views.destroyRecyclerView(folderTabs.getRecyclerView());
+    }
     super.destroy();
     for (TdlibChatListSlice list : listByChatList.values()) {
       list.performDestroy();
     }
-    Views.destroyRecyclerView(recyclerView);
-    TGLegacyManager.instance().removeEmojiListener(adapter);
+    if (folderPager != null) {
+      folderPager.setAdapter(null);
+    }
+    for (ShareChatPage page : chatPages.values()) {
+      Views.destroyRecyclerView(page.recyclerView);
+      TGLegacyManager.instance().removeEmojiListener(page.adapter);
+    }
+    chatPages.clear();
     cancelDownloadingFiles();
     context().removeFullScreenView(this, false);
   }

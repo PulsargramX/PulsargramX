@@ -18,6 +18,8 @@ obj
 /captures
 /local.properties
 
+/tests/*/checks
+
 libc++_shared.so
 
 # GitHub Actions secrets helper output

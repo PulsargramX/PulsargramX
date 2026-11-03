@@ -29,6 +29,7 @@ import java.util.*;
 @interface Nullable {}
 @interface NonNull {}
 @interface TdlibThread {}
+@interface AnyThread {}
 class TdApi {
   abstract static class ObjectType { abstract int getConstructor(); }
   abstract static class NotificationGroupType extends ObjectType {}
@@ -78,6 +79,7 @@ class TdApi {
     NotificationGroupType type; Notification[] addedNotifications; int[] removedNotificationIds;
   }
   static class UpdateNotification { int notificationGroupId; Notification notification; }
+  static class MessageTopic {}
   static class UpdateMessageMentionRead {
     long chatId, messageId; int unreadMentionCount;
   }
@@ -364,9 +366,14 @@ def harness(revision: str | None) -> str:
       final Map<Integer, TdlibNotificationGroup> groups = new HashMap<>();
       final ArrayList<TdlibNotification> notifications = new ArrayList<>();
       final Set<Integer> hidden = new HashSet<>();
+      final List<Object[]> topicReads = new ArrayList<>();
+      void removeTopicNotifications(long chatId, TdApi.MessageTopic topicId, long lastRead) {
+        topicReads.add(new Object[] {chatId, topicId, lastRead});
+      }
       final TdlibNotificationManager context = new TdlibNotificationManager(this);
       TdlibNotificationHelper(Tdlib tdlib) { this.tdlib = tdlib; }
       boolean allowNotificationPreview() { return true; }
+      void retainIcons() {}
       boolean removeReadTopicNotification(TdlibNotificationGroup group, TdlibNotification notification) {
         return false;
       }
@@ -388,11 +395,15 @@ def harness(revision: str | None) -> str:
     output += "class TdlibNotificationManager {\n" + r"""
       @interface NotificationThread {}
       static final int ON_MESSAGE_MENTION_READ = 23, ON_UPDATE_NOTIFICATION_GROUP = 6;
+      static final int REMOVE_TOPIC_NOTIFICATIONS = 22;
       final TdlibNotificationHelper notification;
       class Queue extends ArrayDeque<Message> { Object getHandler() { return this; } }
       final Queue queue = new Queue();
       TdlibNotificationManager(TdlibNotificationHelper helper) { notification = helper; }
       void sendLockedMessage(Message message, Object after) { queue.add(message); }
+      void sendLocked(Object after, int what, Object value) {
+        queue.add(Message.obtain(queue, what, value));
+      }
       boolean isMessageFromActiveTopic(TdApi.Message message) { return false; }
       boolean allowNotificationSound(long chatId) { return true; }
       void incoming(TdApi.UpdateNotificationGroup update) {
@@ -403,11 +414,40 @@ def harness(revision: str | None) -> str:
                        "void onMessageMentionRead(TdApi.UpdateMessageMentionRead update) {}")
     output += optional(manager, "private void onMessageMentionReadImpl (",
                        "void onMessageMentionReadImpl(TdApi.UpdateMessageMentionRead update) {}")
+    output += optional(manager, "public void removeTopicNotifications (", "")
+    output += optional(manager, "private void removeTopicNotificationsImpl (", "")
     output += method(manager, "private void processNotificationGroup (")
-    output += "void drain() { while (!queue.isEmpty()) { Message msg = queue.remove(); switch (msg.what) {\n"
+    if "implements SerialQueue.Callback" in manager:
+        output = output.replace(
+            "class Queue extends ArrayDeque<Message> { Object getHandler() { return this; } }",
+            "class Queue extends ArrayDeque<Message> {}"
+        ).replace(
+            "void sendLockedMessage(Message message, Object after) { queue.add(message); }", ""
+        )
+        output += "void drain() { while (!queue.isEmpty()) { Message queued = queue.remove(); Object object = queued.obj; switch (queued.what) {\n"
+    else:
+        output += "void drain() { while (!queue.isEmpty()) { Message msg = queue.remove(); switch (msg.what) {\n"
     output += optional(manager, "case ON_MESSAGE_MENTION_READ:", "case ON_MESSAGE_MENTION_READ: { break; }")
+    output += optional(manager, "case REMOVE_TOPIC_NOTIFICATIONS:", "")
     output += method(manager, "case ON_UPDATE_NOTIFICATION_GROUP:") + "\n} } }\n}\n"
-    return output + SCENARIOS
+    scenarios = SCENARIOS
+    if "public void removeTopicNotifications (" in manager:
+        scenarios = scenarios.replace('    run("Viewed plain reply', r'''    run("Topic read requests preserve their arguments and queue order", () -> {
+      Scenario s = new Scenario();
+      TdApi.MessageTopic first = new TdApi.MessageTopic();
+      TdApi.MessageTopic second = new TdApi.MessageTopic();
+      s.manager.removeTopicNotifications(100L, first, 1000L);
+      s.manager.removeTopicNotifications(200L, second, 2000L);
+      check(s.helper.topicReads.isEmpty(), "Topic reads must run on the notification queue");
+      s.manager.drain();
+      check(s.helper.topicReads.size() == 2, "Both queued topic reads must arrive");
+      Object[] a = s.helper.topicReads.get(0), b = s.helper.topicReads.get(1);
+      check((long) a[0] == 100L && a[1] == first && (long) a[2] == 1000L &&
+        (long) b[0] == 200L && b[1] == second && (long) b[2] == 2000L,
+        "Topic read routing or order changed");
+    });
+    run("Viewed plain reply''')
+    return output + scenarios
 
 
 def main() -> None:

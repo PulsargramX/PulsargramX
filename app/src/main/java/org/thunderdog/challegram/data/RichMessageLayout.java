@@ -812,6 +812,9 @@ public final class RichMessageLayout implements MessageTextSelectionSurface {
         case RichMessageFlattener.KIND_DETAILS:
           nodes.add(new DetailsNode(spec));
           break;
+        case RichMessageFlattener.KIND_BUTTONS:
+          nodes.add(new ButtonRowNode(spec));
+          break;
         case RichMessageFlattener.KIND_TABLE:
           nodes.add(new TableNode(spec));
           break;
@@ -1671,6 +1674,212 @@ public final class RichMessageLayout implements MessageTextSelectionSurface {
           return true;
       }
       return false;
+    }
+  }
+
+  private final class ButtonRowNode extends BlockNode {
+    final ArrayList<RichButton> buttons = new ArrayList<>();
+    @Nullable RichButton pressed;
+    float downX, downY;
+
+    ButtonRowNode (RichMessageFlattener.Node spec) {
+      super(spec);
+      TdApi.InlineButton[] source = ((TdApi.PageBlockButtonRow) spec.block).buttons;
+      if (source != null) {
+        for (TdApi.InlineButton button : source) {
+          if (button != null && button.type != null) {
+            buttons.add(new RichButton(button));
+          }
+        }
+      }
+    }
+
+    @Override
+    public int measure (int width) {
+      this.width = width;
+      height = buttons.isEmpty() ? 0 :
+        Screen.dp(18f + TGMessage.getTextStyleProvider().getTextSize());
+      int gap = Math.min(Screen.dp(7f), width / Math.max(1, buttons.size() * 2));
+      int available = Math.max(0, width - gap * Math.max(0, buttons.size() - 1));
+      int preferred = 0;
+      for (RichButton button : buttons) {
+        button.label.prepare(Math.max(1, width));
+        button.width = Math.min(width, button.label.getWidth() +
+          Screen.dp(button.hasIcon() ? 52f : 40f));
+        preferred += button.width;
+      }
+      TdApi.PageBlockHorizontalAlignment align = ((TdApi.PageBlockButtonRow) spec.block).align;
+      // Keep longer labels at their preferred width while sharing spare space between short ones.
+      int rest = available, flexible = buttons.size();
+      boolean[] fixed = new boolean[buttons.size()];
+      if (align == null && preferred <= available) {
+        boolean changed = true;
+        while (changed && flexible > 0) {
+          changed = false;
+          int share = rest / flexible;
+          for (int i = 0; i < buttons.size(); i++) {
+            if (!fixed[i] && buttons.get(i).width > share) {
+              fixed[i] = true;
+              rest -= buttons.get(i).width;
+              flexible--;
+              changed = true;
+            }
+          }
+        }
+      }
+      int x = 0;
+      if (preferred < available && align != null) {
+        x = align instanceof TdApi.PageBlockHorizontalAlignmentRight ? available - preferred :
+          align instanceof TdApi.PageBlockHorizontalAlignmentCenter ? (available - preferred) / 2 : 0;
+      }
+      int remaining = available;
+      for (int i = 0; i < buttons.size(); i++) {
+        RichButton button = buttons.get(i);
+        if (preferred > available) {
+          button.width = i == buttons.size() - 1 ? remaining :
+            (int) ((long) button.width * available / Math.max(1, preferred));
+          remaining -= button.width;
+        } else if (align == null && !fixed[i]) {
+          button.width = rest / flexible;
+          rest -= button.width;
+          flexible--;
+        }
+        button.left = x;
+        button.label.prepare(Math.max(1, button.width - Screen.dp(button.hasIcon() ? 40f : 16f)));
+        x += button.width + gap;
+      }
+      return height;
+    }
+
+    @Override
+    void draw (MessageView view, Canvas canvas, int x, int y,
+               ComplexReceiver receiver, float alpha) {
+      for (RichButton button : buttons) {
+        button.action.setRichBounds(x + button.left, y,
+          x + button.left + button.width, y + height);
+        float opacity = alpha * (button.disabled() ? .5f : 1f);
+        int color = button.color();
+        RectF bounds = Paints.getRectF();
+        bounds.set(x + button.left, y, x + button.left + button.width, y + height);
+        if (!(button.button.style instanceof TdApi.ButtonStyleLink)) {
+          float strength = button.button.style instanceof TdApi.ButtonStylePrimary ? 1f : .12f;
+          if (pressed == button) strength = Math.min(1f, strength + .12f);
+          canvas.drawRoundRect(bounds, height / 2f, height / 2f,
+            Paints.fillingPaint(ColorUtils.alphaColor(opacity * strength, color)));
+        }
+        int save = Views.save(canvas);
+        canvas.clipRect(bounds);
+        int right = x + button.left + button.width - Screen.dp(button.hasIcon() ? 22f : 8f);
+        int left = x + button.left + Math.max(Screen.dp(8f),
+          (button.width - button.label.getWidth()) / 2);
+        left = Math.min(left,
+          Math.max(x + button.left + Screen.dp(8f), right - button.label.getWidth()));
+        button.label.draw(canvas, left, right, 0,
+          y + (height - button.label.getHeight()) / 2, null, opacity, receiver);
+        if (button.hasIcon()) {
+          Paint paint = Paints.getProgressPaint(button.textColor(), Screen.dp(1.5f));
+          paint.setAlpha(Math.round(opacity * 255));
+          float edge = x + button.left + button.width - Screen.dp(10f);
+          float top = y + Screen.dp(10f), size = Screen.dp(5f);
+          canvas.drawLine(edge - size, top + size, edge, top, paint);
+          canvas.drawLine(edge - size, top, edge, top, paint);
+          canvas.drawLine(edge, top, edge, top + size, paint);
+          paint.setAlpha(255);
+        }
+        Views.restore(canvas, save);
+      }
+    }
+
+    private RichButton buttonAt (float x, float y) {
+      if (y < 0 || y >= height) return null;
+      for (RichButton button : buttons) {
+        if (x >= button.left && x < button.left + button.width && !button.disabled()) return button;
+      }
+      return null;
+    }
+
+    @Override
+    public boolean onTouchEvent (@NonNull View view, @NonNull MotionEvent event, int x, int y) {
+      switch (event.getActionMasked()) {
+        case MotionEvent.ACTION_DOWN:
+          pressed = buttonAt(event.getX() - x, event.getY() - y);
+          downX = event.getX();
+          downY = event.getY();
+          owner.invalidate();
+          return pressed != null;
+        case MotionEvent.ACTION_MOVE:
+          int slop = ViewConfiguration.get(view.getContext()).getScaledTouchSlop();
+          if (Math.abs(event.getX() - downX) > slop || Math.abs(event.getY() - downY) > slop) {
+            pressed = null;
+          }
+          owner.invalidate();
+          return true;
+        case MotionEvent.ACTION_UP:
+          RichButton clicked = pressed;
+          pressed = null;
+          if (clicked != null && clicked == buttonAt(event.getX() - x, event.getY() - y)) {
+            clicked.action.performClick(view);
+          }
+          owner.invalidate();
+          return true;
+        case MotionEvent.ACTION_CANCEL:
+          pressed = null;
+          owner.invalidate();
+          return true;
+      }
+      return false;
+    }
+
+    @Override
+    public void requestMedia (@NonNull ComplexReceiver receiver) {
+      for (int i = 0; i < buttons.size(); i++) {
+        buttons.get(i).label.requestMedia(receiver,
+          RichMessageFlattener.receiverKey(spec.path + "/button/" + i, 0), 256);
+      }
+    }
+
+    @Override
+    public void performDestroy () {
+      for (RichButton button : buttons) button.label.performDestroy();
+    }
+
+    private final class RichButton {
+      final TdApi.InlineButton button;
+      final TextWrapper label;
+      final TGInlineKeyboard.Button action;
+      int left, width;
+
+      RichButton (TdApi.InlineButton button) {
+        this.button = button;
+        action = TGInlineKeyboard.richButton(owner, button);
+        label = TextWrapper.parseRichText(owner.controller(), owner.clickCallback(),
+          new TdApi.RichTextBold(button.text != null ? button.text : new TdApi.RichTextPlain("")),
+          TGMessage.getTextStyleProvider(), new TextColorSetOverride(owner.getTextColorSet()) {
+            @Override
+            public int defaultTextColor () { return textColor(); }
+          }, owner.openParameters(), (wrapper, text, media) -> owner.invalidateContentReceiver());
+        label.setViewProvider(owner.currentViews);
+        label.setMaxLines(1);
+      }
+
+      boolean disabled () { return button.type instanceof TdApi.InlineKeyboardButtonTypeDisabled; }
+      boolean hasIcon () {
+        return button.type instanceof TdApi.InlineKeyboardButtonTypeUrl ||
+          button.type instanceof TdApi.InlineKeyboardButtonTypeLoginUrl;
+      }
+      int color () {
+        if (button.style instanceof TdApi.ButtonStyleDanger) {
+          return Theme.getColor(ColorId.textNegative);
+        }
+        if (button.style instanceof TdApi.ButtonStyleSuccess) {
+          return Theme.getColor(ColorId.fillingPositive);
+        }
+        return owner.getTextColorSet().clickableTextColor(false);
+      }
+      int textColor () {
+        return button.style instanceof TdApi.ButtonStylePrimary ?
+          Theme.getColor(ColorId.fillingPositiveContent) : color();
+      }
     }
   }
 
@@ -2872,7 +3081,12 @@ public final class RichMessageLayout implements MessageTextSelectionSurface {
         info.setContentDescription(summary);
         for (BlockNode node : nodes) {
           if (isExposed(node)) {
-            info.addChild(view, virtualId(node));
+            if (node instanceof ButtonRowNode) {
+              ButtonRowNode row = (ButtonRowNode) node;
+              for (int i = 0; i < row.buttons.size(); i++) info.addChild(view, buttonId(row, i));
+            } else {
+              info.addChild(view, virtualId(node));
+            }
           }
         }
         if (!message.isFull) info.addChild(view, SHOW_MORE_ID);
@@ -2898,6 +3112,33 @@ public final class RichMessageLayout implements MessageTextSelectionSurface {
         info.setBoundsInScreen(bounds);
         addFocusActions(info, virtualViewId);
         return info;
+      }
+      for (BlockNode candidate : nodes) {
+        if (!(candidate instanceof ButtonRowNode) || !isExposed(candidate)) continue;
+        ButtonRowNode row = (ButtonRowNode) candidate;
+        for (int i = 0; i < row.buttons.size(); i++) {
+          if (buttonId(row, i) != virtualViewId) continue;
+          ButtonRowNode.RichButton button = row.buttons.get(i);
+          AccessibilityNodeInfo info = AccessibilityNodeInfo.obtain();
+          info.setSource(view, virtualViewId);
+          info.setParent(view);
+          info.setPackageName(view.getContext().getPackageName());
+          info.setClassName("android.widget.Button");
+          info.setText(button.label.getText());
+          info.setEnabled(!button.disabled());
+          info.setClickable(!button.disabled());
+          info.setVisibleToUser(view.isShown());
+          if (!button.disabled()) info.addAction(AccessibilityNodeInfo.ACTION_CLICK);
+          int left = owner.getContentX() + (message.isRtl ? 0 : row.contentInset) + button.left;
+          int top = owner.getContentY() + row.top;
+          bounds.set(left, top, left + button.width, top + row.height);
+          info.setBoundsInParent(bounds);
+          view.getLocationOnScreen(screenLocation);
+          bounds.offset(screenLocation[0], screenLocation[1]);
+          info.setBoundsInScreen(bounds);
+          addFocusActions(info, virtualViewId);
+          return info;
+        }
       }
       BlockNode node = findNode(virtualViewId);
       if (node == null || !isExposed(node)) {
@@ -3012,6 +3253,18 @@ public final class RichMessageLayout implements MessageTextSelectionSurface {
         callback.onRequestFullMessage();
         return true;
       }
+      if (action == AccessibilityNodeInfo.ACTION_CLICK) {
+        for (BlockNode candidate : nodes) {
+          if (!(candidate instanceof ButtonRowNode) || !isExposed(candidate)) continue;
+          ButtonRowNode row = (ButtonRowNode) candidate;
+          for (int i = 0; i < row.buttons.size(); i++) {
+            if (buttonId(row, i) == virtualViewId && !row.buttons.get(i).disabled()) {
+              row.buttons.get(i).action.performClick(view);
+              return true;
+            }
+          }
+        }
+      }
       BlockNode node = findNode(virtualViewId);
       if (node == null) {
         return false;
@@ -3073,6 +3326,11 @@ public final class RichMessageLayout implements MessageTextSelectionSurface {
         }
       }
       return null;
+    }
+
+    private int buttonId (ButtonRowNode row, int index) {
+      return (int) RichMessageFlattener.receiverKey(row.spec.path + "/button/" + index,
+        RichMessageFlattener.KIND_BUTTONS) & Integer.MAX_VALUE;
     }
 
     private int virtualId (BlockNode node) {

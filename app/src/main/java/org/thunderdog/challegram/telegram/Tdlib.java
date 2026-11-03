@@ -566,7 +566,7 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
         BuildConfig.TELEGRAM_API_ID,
         BuildConfig.TELEGRAM_API_HASH,
         null, null, null, // updateParameters
-        BuildConfig.VERSION_NAME
+        U.getVersionName()
       );
     } else {
       this.parameters = new TdApi.SetTdlibParameters(
@@ -579,7 +579,7 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
         BuildConfig.TELEGRAM_API_ID,
         BuildConfig.TELEGRAM_API_HASH,
         null, null, null, // updateParameters
-        BuildConfig.VERSION_NAME
+        U.getVersionName()
       );
     }
 
@@ -5549,7 +5549,7 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
 
   public String emailMetadata () {
     return Lang.getString(R.string.email_metadata,
-      BuildConfig.VERSION_NAME,
+      U.getVersionName(),
       languagePackId,
       TdlibManager.getSystemLanguageCode(),
       TdlibManager.getSystemVersion());
@@ -5652,7 +5652,7 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
       case TdApi.MessageAnimation.CONSTRUCTOR:
         return !photoVideoOnly;
       default:
-        Td.assertMessageContent_f7758f8b();
+        Td.assertMessageContent_cc875c63();
         break;
     }
 
@@ -5741,7 +5741,7 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
         case TdApi.MessageAnimatedEmoji.CONSTRUCTOR:
           return Td.textOrCaption(messageText);
       }
-      Td.assertMessageContent_f7758f8b();
+      Td.assertMessageContent_cc875c63();
       throw Td.unsupported(messageText);
     }
     MessageEditMediaPending pendingEditMedia = getPendingMessageMedia(chatId, messageId);
@@ -8692,7 +8692,7 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
         break;
       }
       default: {
-        Td.assertMessageContent_f7758f8b();
+        Td.assertMessageContent_cc875c63();
         break;
       }
     }
@@ -10143,9 +10143,8 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
     if (update.file.local.isDownloadingActive || update.file.remote.isUploadingActive) {
       files().onFileProgress(update);
 
-      int fileId = update.file.id;
       if (!ImageLoader.instance().onProgress(this, update.file)) {
-        if (!GifBridge.instance().onProgress(this, fileId, TD.getFileProgress(update.file))) {
+        if (!GifBridge.instance().onProgress(this, update.file, TD.getFileProgress(update.file))) {
           // Nothing?
         }
       }
@@ -11772,6 +11771,9 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
       case TdApi.UpdateTonWalletState.CONSTRUCTOR:
       case TdApi.UpdateTonWalletTonConnectSession.CONSTRUCTOR:
       case TdApi.UpdateTonWalletTonConnectSessionDisconnectRequired.CONSTRUCTOR:
+      case TdApi.UpdateWebProxyCarrierOpened.CONSTRUCTOR:
+      case TdApi.UpdateWebProxyCarrierData.CONSTRUCTOR:
+      case TdApi.UpdateWebProxyCarrierClosed.CONSTRUCTOR:
         break;
 
       // for bots only.
@@ -11803,7 +11805,7 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
         throw Td.unsupported(update);
       }
       default: {
-        Td.assertUpdate_c11d0a6d();
+        Td.assertUpdate_2a2bec96();
         throw Td.unsupported(update);
       }
     }
@@ -12850,11 +12852,12 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
         case TdApi.MessageChatRemovedFromCommunity.CONSTRUCTOR:
         case TdApi.MessageTonConnectRequest.CONSTRUCTOR:
         case TdApi.MessageTonWalletTransfer.CONSTRUCTOR:
+        case TdApi.MessageUnpaidMessagesAllowedByLink.CONSTRUCTOR:
           // None of these messages ever passed to this method,
           // assuming we want to check RightId.SEND_BASIC_MESSAGES
           return getBasicMessageRestrictionText(chat);
         default:
-          Td.assertMessageContent_f7758f8b();
+          Td.assertMessageContent_cc875c63();
           throw Td.unsupported(message.content);
       }
     }

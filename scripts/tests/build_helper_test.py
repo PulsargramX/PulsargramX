@@ -173,6 +173,46 @@ class EditionReleaseBuildTest(unittest.TestCase):
 
 
 class QuietGradleTest(unittest.TestCase):
+  def test_child_jdk_tools_inherit_clean_container_logging_and_caller_options(self):
+    for inherited in (None, "-Dbuild.test=true -Xlog:os+container=trace"):
+      with self.subTest(inherited=inherited), tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        wrapper = root / "gradlew"
+        wrapper.write_text(
+          '#!/usr/bin/env python3\nimport os, pathlib, sys\n'
+          'stage = "cleanup" if "--stop" in sys.argv else "build"\n'
+          'pathlib.Path(stage).write_text(os.environ["JAVA_TOOL_OPTIONS"])\n'
+        )
+        wrapper.chmod(0o755)
+        environment = dict(os.environ, TGX_GRADLE_PROJECT_DIR=str(root))
+        environment.pop("JAVA_TOOL_OPTIONS", None)
+        if inherited is not None:
+          environment["JAVA_TOOL_OPTIONS"] = inherited
+        result = subprocess.run([str(SCRIPTS / "gradle.sh"), "compileJava"],
+                                env=environment, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        expected = ((inherited + " ") if inherited else "") + "-Xlog:os+container=off"
+        self.assertEqual((root / "build").read_text(), expected)
+        self.assertEqual((root / "cleanup").read_text(), expected)
+        self.assertNotIn("JAVA_TOOL_OPTIONS", result.stdout + result.stderr)
+
+  @unittest.skipUnless(shutil.which("jlink"), "Requires jlink")
+  def test_jlink_version_stdout_remains_parseable(self):
+    with tempfile.TemporaryDirectory() as directory:
+      root = Path(directory)
+      wrapper = root / "gradlew"
+      wrapper.write_text(
+        '#!/bin/sh\n[ "$1" = --stop ] && exit 0\n'
+        'jlink --version > jdk-version\n'
+      )
+      wrapper.chmod(0o755)
+      environment = dict(os.environ, TGX_GRADLE_PROJECT_DIR=str(root),
+                         JAVA_TOOL_OPTIONS="-Xlog:os+container=trace")
+      result = subprocess.run([str(SCRIPTS / "gradle.sh"), "compileJava"],
+                              env=environment, capture_output=True, text=True)
+      self.assertEqual(result.returncode, 0, result.stderr)
+      self.assertRegex((root / "jdk-version").read_text().strip(), r"^\d+[.\w+-]*$")
+
   def test_compiler_diagnostics_and_gradle_cause_survive_quiet_capture(self):
     with tempfile.TemporaryDirectory() as directory:
       root = Path(directory)

@@ -271,6 +271,7 @@ public class TdlibNotificationHelper implements Iterable<TdlibNotificationGroup>
         rebuild();
       }
     }
+    retainIcons();
   }
 
   private boolean haveRebuilt;
@@ -670,6 +671,7 @@ public class TdlibNotificationHelper implements Iterable<TdlibNotificationGroup>
       }
     }
     for (TdlibNotificationGroup group : hiddenGroups) hideNotificationGroup(group);
+    retainIcons();
   }
 
   public void onHide (TdlibNotificationExtras extras) {
@@ -682,6 +684,7 @@ public class TdlibNotificationHelper implements Iterable<TdlibNotificationGroup>
     } else {
       tdlib.settings().setNotificationGroupData(extras.notificationGroupId, extras.maxNotificationId, 0);
     }
+    retainIcons();
   }
 
   public void onDropNotificationData (boolean hideAll) {
@@ -703,6 +706,7 @@ public class TdlibNotificationHelper implements Iterable<TdlibNotificationGroup>
     if (!hideAll && update) {
       rebuild();
     }
+    retainIcons();
   }
 
   public long findSingleChatId () {
@@ -753,6 +757,7 @@ public class TdlibNotificationHelper implements Iterable<TdlibNotificationGroup>
     TdlibNotificationSettings settings = needNotification && !group.isHidden() ? new TdlibNotificationSettings(tdlib, notificationSettingsChatId, group) : null;
     style.displayNotificationGroup(context, this, badgeCount, allowPreview, group, settings);
     tdlib.context().setHavePendingNotifications(tdlib.id(), true);
+    retainIcons();
   }
 
   private void hideNotificationGroup (@NonNull TdlibNotificationGroup group) {
@@ -762,6 +767,7 @@ public class TdlibNotificationHelper implements Iterable<TdlibNotificationGroup>
     boolean allowPreview = allowNotificationPreview();
     style.hideNotificationGroup(context, this, badgeCount, allowPreview, group);
     tdlib.context().setHavePendingNotifications(tdlib.id(), !isEmpty());
+    retainIcons();
   }
 
   private void rebuild (@Nullable TdApi.NotificationSettingsScope scope, long specificChatId, int specificGroupId) {
@@ -773,6 +779,7 @@ public class TdlibNotificationHelper implements Iterable<TdlibNotificationGroup>
       style.rebuildNotificationsSilently(context, this, badgeCount, allowPreview, scope, specificChatId, specificGroupId);
     }
     tdlib.context().setHavePendingNotifications(tdlib.id(), haveNotifications);
+    retainIcons();
   }
 
   public void rebuild () {
@@ -789,6 +796,28 @@ public class TdlibNotificationHelper implements Iterable<TdlibNotificationGroup>
 
   public void rebuildGroup (int groupId) {
     rebuild(null, 0, groupId);
+  }
+
+  private void retainIcons () {
+    // Muted groups keep their icons while mentions or pinned messages can still come there
+    if (!Config.REUSE_NOTIFICATION_ICONS) {
+      return;
+    }
+    final Set<Long> chatIds = new HashSet<>();
+    for (TdlibNotificationGroup group : this) {
+      final long chatId = group.getChatId();
+      if (canNotify(chatId)) {
+        chatIds.add(chatId);
+      }
+    }
+    tdlib.context().notificationIcons().retainChats(tdlib.id(), chatIds);
+  }
+
+  private boolean canNotify (long chatId) {
+    final TdlibNotificationManager notifications = tdlib.notifications();
+    return tdlib.chatNotificationsEnabled(chatId) || (tdlib.isMultiChat(chatId) && !(
+      notifications.areMentionsDisabled(chatId) && notifications.arePinnedMessagesDisabled(chatId)
+    ));
   }
 
   public void onChatOpened (long chatId) {

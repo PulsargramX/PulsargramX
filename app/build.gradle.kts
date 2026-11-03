@@ -9,11 +9,13 @@ import org.gradle.kotlin.dsl.support.uppercaseFirstChar
 import tgx.gradle.*
 import tgx.gradle.source.GitInformationSource
 import tgx.gradle.task.*
+import tgx.test.configureTests
 import java.util.*
 
 plugins {
   id("java-toolchain-convention")
   id(libs.plugins.android.application.get().pluginId)
+  id(libs.plugins.androidx.baselineprofile.get().pluginId)
   id("tgx-config")
   id("tgx-module")
 }
@@ -49,7 +51,6 @@ val validatePublicConfiguration = tasks.register("validatePublicConfiguration") 
     }
   }
 }
-val generateBaselineProfile = tgxConfig.generateBaselineProfile.get()
 val useLegacyPackaging = tgxConfig.useLegacyPackaging.get()
 val useLegacyNdk = tgxConfig.useLegacyNdk.get()
 val globalAbiFilters = tgxConfig.abiFilters.get()
@@ -270,6 +271,86 @@ val buildLibvpxTask = tasks.register("buildLibvpx") {
   dependsOn(buildLibvpxTasks.values)
 }
 
+val buildTlottieTasks = Sdk.VARIANTS.values.filter {
+  (it.usesLegacyNdk == useLegacyNdk ||
+    config.build.primaryNdkVersion == config.build.legacyNdkVersion)
+}.flatMap { sdkVariant ->
+  globalAbiFilters.map { abiFilter ->
+    Pair(Pair(sdkVariant.flavor, abiFilter), tasks.register<BuildTlottieTask>(
+      "buildTlottie[${sdkVariant.flavor},${abiFilter}]"
+    ) {
+      group = "Setup"
+      description = "Builds tlottie for ${sdkVariant.flavor} flavor, abi: $abiFilter"
+      // System
+      sdkDir.set(File(config.sdkDir))
+      msys2Dir.set(msys2Directory(config.msys2Dir))
+      ndkVersion.set(android.ndkVersion)
+      hostTag.set(findHostTag())
+      rustDir.set(File(config.rustDir))
+      rustVersion.set(config.build.rustVersion)
+      // Input
+      inputDir.set(layout.projectDirectory.dir(
+        "jni/third_party/tlottie"
+      ))
+      inputSources.from(inputDir.asFileTree.matching {
+        exclude(
+          ".git",
+          "examples",
+          "tools",
+          "*.md"
+        )
+      })
+      sdkFlavor.set(sdkVariant.flavor)
+      abi.set(abiFilter)
+      // Optimizations guided by the profile of drawing on a device of the ABI, see
+      // generateTlottieProfile
+      val profileFile = layout.projectDirectory.file("jni/tlottie/${abiFilter}.profdata")
+      if (profileFile.asFile.exists()) {
+        profile.set(profileFile)
+        profiles.set(layout.projectDirectory.file("jni/tlottie/profiles.properties"))
+      }
+      // Output
+      buildDir.set(layout.buildDirectory.dir(
+        "generated/tgx/tlottie-build/${abiFilter}"
+      ))
+      outputDir.set(layout.buildDirectory.dir(
+        "generated/tgx/tlottie/${sdkVariant.flavor}/${abiFilter}"
+      ))
+      dependsOn(validateGitSetupTask)
+    })
+  }
+}.toMap()
+
+val buildTlottieTask = tasks.register("buildTlottie") {
+  group = "Setup"
+  description = "Builds tlottie for all flavors and abis (${buildTlottieTasks.size} total)"
+  dependsOn(buildTlottieTasks.values)
+}
+
+// Profiles of drawing of tlottie, made by hand on a device of the ABI after updates of tlottie or
+// Rust, e.g. ANDROID_SERIAL=<device> ./gradlew ":app:generateTlottieProfile[arm64-v8a]"
+// -Ptlottie.samples=<folder with emoji, sticker and effect>. x86 and x86_64 have no device to make
+// them on
+val tlottieSamples = providers.gradleProperty("tlottie.samples").map { File(it) }
+listOf("arm64-v8a", "armeabi-v7a").filter { it in globalAbiFilters }.forEach { abiFilter ->
+  tasks.register<GenerateTlottieProfileTask>("generateTlottieProfile[$abiFilter]") {
+    group = "Setup"
+    description = "Makes the profile of drawing of tlottie for $abiFilter on a connected device"
+    sdkDir.set(File(config.sdkDir))
+    ndkVersion.set(config.build.primaryNdkVersion)
+    hostTag.set(findHostTag())
+    rustDir.set(File(config.rustDir))
+    rustVersion.set(config.build.rustVersion)
+    abi.set(abiFilter)
+    inputDir.set(layout.projectDirectory.dir("jni/third_party/tlottie"))
+    runner.set(layout.projectDirectory.file("jni/tlottie/profile.c"))
+    samples.fileProvider(tlottieSamples)
+    profile.set(layout.projectDirectory.file("jni/tlottie/$abiFilter.profdata"))
+    profiles.set(layout.projectDirectory.file("jni/tlottie/profiles.properties"))
+    buildDir.set(layout.buildDirectory.dir("generated/tgx/tlottie-profile/$abiFilter"))
+  }
+}
+
 val buildFfmpegTasks = Sdk.VARIANTS.values.filter {
   (it.usesLegacyNdk == useLegacyNdk || config.build.primaryNdkVersion == config.build.legacyNdkVersion)
 }.flatMap { sdkVariant ->
@@ -408,7 +489,6 @@ android {
     buildConfigString("NDK_VERSION", ndkVersion)
     buildConfigBool("SHARED_STL", true)
     buildConfigBool("WEBP_ENABLED", true)
-    buildConfigBool("GENERATING_BASELINE_PROFILE", generateBaselineProfile)
 
     // Library versions in BuildConfig.java
 
@@ -517,10 +597,6 @@ android {
   }
 
   sourceSets.getByName("main") {
-    if (!generateBaselineProfile) {
-      // Consume the saved baseline and startup profiles without running the generator plugin.
-      baselineProfiles.directories += "src/main/generated/baselineProfiles"
-    }
     // TODO: Exclude in FOSS variant
     kotlin.directories += "src/google/main/java"
     java.directories += "src/google/main/java"
@@ -573,9 +649,6 @@ android {
         dimension = "SDK"
         isDefault = sdkIndex == Sdk.LATEST
 
-        if (generateBaselineProfile && !variant.isLatest) {
-          matchingFallbacks += Sdk.VARIANTS[Sdk.LATEST]!!.flavor
-        }
         Sdk.VARIANTS.forEach { (subSdkIndex, subVariant) ->
           buildConfigBool("${subVariant.flavor.uppercase()}_FLAVOR", sdkIndex == subSdkIndex)
         }
@@ -642,6 +715,9 @@ android {
             ),
             "FFMPEG_DIR" to layout.buildDirectory.dir(
               "generated/tgx/ffmpeg/${variant.flavor}"
+            ),
+            "TLOTTIE_DIR" to layout.buildDirectory.dir(
+              "generated/tgx/tlottie/${variant.flavor}"
             )
           ).map {
             "-D${it.key}=${it.value.get().asFile.absoluteFile.invariantSeparatorsPath}"
@@ -650,6 +726,10 @@ android {
         }
 
         sourceSets.getByName(variant.flavor) {
+          if (variant.usesBaselineProfile) {
+            // Both editions consume the saved SDK-specific profiles from upstream.
+            baselineProfiles.directories += "src/${variant.flavor}Release/generated/baselineProfiles"
+          }
           Config.ANDROIDX_MEDIA_EXTENSIONS.forEach { extension ->
             java.directories += "thirdparty/androidx-media/${
               variant.jetpackMediaFlavor
@@ -668,6 +748,14 @@ android {
         }
 
         var extraProguardFileCount = 0
+
+        findExtraFolders(variant).forEach { folderName ->
+          val proguardFile = project.layout.projectDirectory.file("src/$folderName/proguard-rules.pro").asFile
+          if (proguardFile.exists()) {
+            proguardFile(proguardFile)
+            extraProguardFileCount++
+          }
+        }
 
         arrayOf(
           "exoplayer",
@@ -760,6 +848,7 @@ android {
         val buildFfmpegTask = buildFfmpegTasks[key] ?: error("ffmpeg task not found for $key")
         nativeBuildTasks += buildLibvpxTask
         nativeBuildTasks += buildFfmpegTask
+        nativeBuildTasks += buildTlottieTasks[key] ?: error("tlottie task not found for $key")
       }
 
       val buildNativeTask = tasks.register<ValidateNativeBuildTask>(
@@ -917,6 +1006,10 @@ android {
       }
 
       variant.buildConfigFields!!.apply {
+        // Build types added by baseline profile plugin, which only tests use
+        put("TEST_HOOKS_ENABLED", BuildConfigField(
+          "boolean", variant.buildType == "nonMinifiedRelease" || variant.buildType == "benchmarkRelease", null
+        ))
         put("RECAPTCHA_VERSION", BuildConfigField(
           "String", "\"$recaptchaVersion\"", null
         ))
@@ -1013,19 +1106,30 @@ android {
   }
 }
 
-if (generateBaselineProfile) {
-  apply(plugin = libs.plugins.androidx.baselineprofile.get().pluginId)
+configureTests()
 
-  extensions.configure<BaselineProfileConsumerExtension> {
-    mergeIntoMain = true
-    automaticGenerationDuringBuild = false
-    saveInSrc = true
-    warnings.disabledVariants = false
+extensions.configure<BaselineProfileConsumerExtension> {
+  mergeIntoMain = false
+  automaticGenerationDuringBuild = false
+  saveInSrc = true
+  warnings.disabledVariants = false
+  warnings.variantHasNoBaselineProfileDependency = false
+  Sdk.VARIANTS.values.filter {
+    it.usesBaselineProfile
+  }.forEach { variant ->
+    variants.create("${selectedEdition}${variant.flavor.uppercaseFirstChar()}Release")
+      .from(project(":tests:baseline-profile"))
   }
+}
 
-  afterEvaluate {
-    dependencies.add("${selectedEdition}LatestReleaseBaselineProfile", project(":baseline-profile"))
-  }
+// Plugin merges and copies profiles of all release variants, which would leave empty folders in src for variants without profiles
+val variantsWithoutBaselineProfile = Sdk.VARIANTS.values.filter {
+  !it.usesBaselineProfile
+}.map { "${selectedEdition.uppercaseFirstChar()}${it.flavor.uppercaseFirstChar()}Release" }
+tasks.named { name ->
+  variantsWithoutBaselineProfile.any { name == "merge${it}BaselineProfile" || name == "copy${it}BaselineProfileIntoSrc" }
+}.configureEach {
+  enabled = false
 }
 
 afterEvaluate {
@@ -1096,7 +1200,12 @@ dependencies {
   )
   implementation(libs.androidx.biometric)
   sinceLollipopImplementation(libs.androidx.webkit)
-  implementation(libs.androidx.palette)
+  flavorImplementation(
+    libs.androidx.palette.legacy,
+    libs.androidx.palette.legacy,
+    libs.androidx.palette.legacy,
+    libs.androidx.palette.latest
+  )
   implementation(libs.androidx.collection)
   implementation(libs.androidx.interpolator)
   // CameraX: https://developer.android.com/jetpack/androidx/releases/camera
@@ -1250,6 +1359,10 @@ dependencies {
   compileOnly(libs.androidx.room.latest)
   compileOnly(libs.annotations.jsr305)
   compileOnly(libs.annotations.kotlin)
+
+  // Tests: tests/README.md
+  testImplementation(libs.bundles.unit.test)
+  androidTestImplementation(project(":tests:core"))
 }
 
 if (!config.isExperimentalBuild) {

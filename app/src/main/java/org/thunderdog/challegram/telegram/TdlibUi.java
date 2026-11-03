@@ -2906,7 +2906,8 @@ public class TdlibUi extends Handler {
     }
 
     public UrlOpenParameters highlightQuote (@Nullable TdApi.TextQuote quote) {
-      return highlightQuote(Td.isEmpty(quote) ? null : new TdApi.InputTextQuote(quote.text, quote.position));
+      return highlightQuote(Td.isEmpty(quote) ? null :
+        new TdApi.InputTextQuote(quote.text, quote.richTexts, quote.position));
     }
 
     public UrlOpenParameters controller (@Nullable ViewController<?> controller) {
@@ -3741,7 +3742,7 @@ public class TdlibUi extends Handler {
       }
       case TdApi.InternalLinkTypeProxy.CONSTRUCTOR: {
         TdApi.Proxy proxy = ((TdApi.InternalLinkTypeProxy) linkType).proxy;
-        if (proxy != null) {
+        if (isSupportedProxy(proxy)) {
           openProxyAlert(context, proxy);
         } else {
           showLinkTooltip(tdlib, R.drawable.baseline_warning_24, Lang.getString(R.string.ProxyLinkUnsupported), openParameters);
@@ -4546,11 +4547,16 @@ public class TdlibUi extends Handler {
     });
   }
 
+  private static boolean isSupportedProxy (@Nullable TdApi.Proxy proxy) {
+    // Web proxies need a relay page in a hidden web view, which the app doesn't have
+    return proxy != null && proxy.type.getConstructor() != TdApi.ProxyTypeWeb.CONSTRUCTOR;
+  }
+
   public void openProxyAlert (TdlibDelegate context, @Nullable TdApi.Proxy proxy) {
     ViewController<?> c = context.context().navigation().getCurrentStackItem();
     if (c == null)
       return;
-    if (proxy == null) {
+    if (!isSupportedProxy(proxy)) {
       // unsupported proxy
       return;
     }

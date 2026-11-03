@@ -622,7 +622,7 @@ public final class MessageTextSelectionManager {
     }
     TdApi.FormattedText quoteText = Td.substring(target.originalText, start, quoteEnd);
     quoteText.entities = filterQuoteEntities(quoteText.entities);
-    TdApi.InputTextQuote quote = new TdApi.InputTextQuote(quoteText, start);
+    TdApi.InputTextQuote quote = new TdApi.InputTextQuote(quoteText, null, start);
     cancel();
     controller.quoteMessage(new MessageWithProperties(message, properties), quote);
   }

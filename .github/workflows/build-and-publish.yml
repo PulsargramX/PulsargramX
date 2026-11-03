@@ -143,6 +143,9 @@ jobs:
           sudo apt-get install -y git git-lfs wget sed make clang g++ gperf php-cli unzip ccache
           git lfs install
       
+      - name: Install pinned Rust and Android targets
+        run: scripts/setup-rust.sh
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
@@ -180,6 +183,7 @@ jobs:
           umask 077
           cat > local.properties << EOF
           sdk.dir=/usr/local/lib/android/sdk
+          rust.dir=$(rustup show home)
           keystore.file=${{ github.workspace }}/keystore.properties
           app.id=com.pulsargram.x
           app.name=Pulsargram X

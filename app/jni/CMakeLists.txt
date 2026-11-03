@@ -6,10 +6,6 @@ if(NOT ANDROID_NDK_MAJOR OR NOT ANDROID_NDK_REVISION)
   message(FATAL_ERROR "Unknown NDK: r${ANDROID_NDK_MAJOR} (${ANDROID_NDK_REVISION})")
 endif()
 
-if (NOT TGX_FLAVOR MATCHES "^(legacy|lollipop|marshmallow|tens|qrs|latest)$")
-  message(FATAL_ERROR "Unknown flavor: ${TGX_FLAVOR}")
-endif()
-
 if (NOT DEFINED ANDROID_MIN_SDK_VERSION)
   message(FATAL_ERROR "ANDROID_MIN_SDK_VERSION is not set")
 endif()
@@ -30,10 +26,10 @@ set(THIRDPARTY_DIR "${PROJECT_SOURCE_DIR}/third_party")
 set(TDLIB_DIR "${TGX_ROOT_DIR}/tdlib")
 set(UTILS_DIR "${THIRDPARTY_DIR}/jni-utils")
 
-if(${TGX_FLAVOR} STREQUAL "legacy")
-  set(ENABLE_TGVOIP no)
-else()
+if(ANDROID_MIN_SDK_VERSION GREATER_EQUAL 21)
   set(ENABLE_TGVOIP yes)
+else()
+  set(ENABLE_TGVOIP no)
 endif()
 
 # Using webp only if building for 32-bit platform
@@ -171,8 +167,15 @@ endif()
 # opusfile
 include("${PROJECT_SOURCE_DIR}/BuildOpusfile.cmake")
 
-# rlottie
-include("${PROJECT_SOURCE_DIR}/BuildRlottie.cmake")
+# tlottie
+set(TLOTTIE_LIB_PATH "${TLOTTIE_DIR}/${ANDROID_ABI}/lib/libtlottie.a")
+add_library(tlottie STATIC IMPORTED)
+set_target_properties(tlottie PROPERTIES IMPORTED_LOCATION "${TLOTTIE_LIB_PATH}")
+target_include_directories(tlottie INTERFACE "${THIRDPARTY_DIR}/tlottie/include")
+if(NOT EXISTS "${TLOTTIE_LIB_PATH}")
+  message(WARNING
+    "Missing dependency: tlottie. Run :app:buildTlottie or Refresh Linked C++ Projects")
+endif()
 
 # lz4
 include("${PROJECT_SOURCE_DIR}/BuildLz4.cmake")
@@ -278,7 +281,7 @@ target_link_libraries(${NATIVE_LIB}
   ogg
   opusfile
   opus
-  rlottie
+  tlottie
   lz4
 )
 if (${USE_WEBP})

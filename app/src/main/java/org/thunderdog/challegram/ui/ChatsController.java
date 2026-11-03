@@ -2480,7 +2480,13 @@ public class ChatsController extends TelegramViewController<ChatsController.Argu
     ArrayList<ListItem> items = new ArrayList<>(5);
 
     TdApi.ChatList chatList = chatList();
-    if (filter != null) {
+    if (pickerDelegate != null && filter != null &&
+        filter.getEmptyStringRes() == R.string.NoGroupsToShow &&
+        chatList instanceof TdApi.ChatListFolder) {
+      items.add(new ListItem(ListItem.TYPE_ICONIZED_EMPTY, 0,
+        R.drawable.baseline_folder_open_96,
+        Lang.getMarkdownString(this, R.string.ChatPickerFolderNoGroups)));
+    } else if (filter != null) {
       items.add(new ListItem(ListItem.TYPE_EMPTY, 0, 0, filter.getEmptyStringRes()));
     } else if (chatList instanceof TdApi.ChatListArchive) {
       items.add(new ListItem(ListItem.TYPE_EMPTY, 0, 0, R.string.NoArchive));

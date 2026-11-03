@@ -22,14 +22,8 @@ dependencyResolutionManagement {
   }
 }
 
-val generateBaselineProfile = providers.gradleProperty("generateBaselineProfile").map {
-  it.toBoolean()
-}.orElse(false)
-
 rootProject.name = "tgx"
-if (generateBaselineProfile.get()) {
-  include(":baseline-profile")
-}
+includeBuild("vkryl/annotation")
 include(
   ":tdlib",
   ":tgcalls",
@@ -42,7 +36,13 @@ include(
   ":extension:bridge",
   ":extension:${extra["extension"]}",
 
-  ":app"
+  ":app",
+
+  ":tests:baseline-profile",
+  ":tests:core",
+  ":tests:ui",
+  ":tests:benchmark",
+  ":tests:microbenchmark"
 )
 // Keep upstream pins untouched; build the reviewed TDLib source overlay.
 project(":tdlib").projectDir = file("tdlib-overlay")

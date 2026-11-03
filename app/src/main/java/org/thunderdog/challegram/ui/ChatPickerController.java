@@ -336,6 +336,23 @@ public class ChatPickerController extends ViewPagerController<ChatsController.Ar
     onChatFoldersChanged(tdlib.chatFolders(), tdlib.mainChatListPosition());
   }
 
+  public void dismissAfterChatOpen () {
+    ViewController<?> destination = context.navigation().getCurrentStackItem();
+    if (destination == null || destination == this) {
+      return;
+    }
+    destination.addOneShotFocusListener(() -> {
+      // Keep the outgoing picker alive until the transition has finished.
+      // Remove this instance only, preserving the source chat and other pickers.
+      for (int i = 0; i < destination.stackSize() - 1; i++) {
+        if (destination.stackItemAt(i) == this) {
+          destination.destroyStackItemAt(i);
+          break;
+        }
+      }
+    });
+  }
+
   @Override
   public void destroy () {
     tdlib.listeners().unsubscribeFromChatFoldersUpdates(this);

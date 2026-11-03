@@ -56,7 +56,6 @@ import org.drinkless.tdlib.Client;
 import org.drinkless.tdlib.TdApi;
 import org.drinkmore.Tracer;
 import org.thunderdog.challegram.BaseActivity;
-import org.thunderdog.challegram.BuildConfig;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.U;
@@ -3105,7 +3104,8 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
               } else {
                 manager.controller().highlightMessage(new MessageId(replyToMessage), toMessageId(),
                   Td.isEmpty(replyToMessage.quote) ? null :
-                    new TdApi.InputTextQuote(replyToMessage.quote.text, replyToMessage.quote.position),
+                    new TdApi.InputTextQuote(
+                      replyToMessage.quote.text, replyToMessage.quote.richTexts, replyToMessage.quote.position),
                   replyToMessage.pollOptionId);
               }
             }
@@ -8870,6 +8870,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         case TdApi.MessagePaymentSuccessfulBot.CONSTRUCTOR:
         case TdApi.MessageTonConnectRequest.CONSTRUCTOR:
         case TdApi.MessageTonWalletTransfer.CONSTRUCTOR:
+        case TdApi.MessageUnpaidMessagesAllowedByLink.CONSTRUCTOR:
           break;
 
         case TdApi.MessageUnsupported.CONSTRUCTOR:
@@ -8882,7 +8883,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
           break;
         }
         default: {
-          Td.assertMessageContent_f7758f8b();
+          Td.assertMessageContent_cc875c63();
           throw Td.unsupported(msg.content);
         }
       }
@@ -8926,7 +8927,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
     logEntity.offset = b.length();
 
-    b.append(Lang.getString(R.string.AppName)).append(' ').append(BuildConfig.VERSION_NAME).append("\n");
+    b.append(Lang.getString(R.string.AppName)).append(' ').append(U.getVersionName()).append("\n");
     b.append("Type: ").append(msg.content != null ? msg.content.getClass().getSimpleName() : "NULL").append("\n");
     b.append("Android: ").append(SdkVersion.getPrettyName()).append(" (").append(Build.VERSION.SDK_INT).append(")\n");
     b.append("Screen: ").append(Screen.widestSide()).append("x").append(Screen.smallestSide()).append("x").append(Screen.density()).append("\n");

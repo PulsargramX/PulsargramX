@@ -38,6 +38,7 @@ public final class RichMessageFlattener {
   public static final int KIND_MEDIA = 6;
   public static final int KIND_ANCHOR = 7;
   public static final int KIND_UNKNOWN = 8;
+  public static final int KIND_BUTTONS = 9;
 
   public static final class State {
     int kind;
@@ -255,6 +256,9 @@ public final class RichMessageFlattener {
       case TdApi.PageBlockMap.CONSTRUCTOR:
         addNode(path, KIND_MEDIA, block, null, context, marker, previousState, states, out);
         addMediaCaption(block, path, context, previousState, states, out);
+        return;
+      case TdApi.PageBlockButtonRow.CONSTRUCTOR:
+        addNode(path, KIND_BUTTONS, block, null, context, marker, previousState, states, out);
         return;
       case TdApi.PageBlockTable.CONSTRUCTOR:
         addNode(path, KIND_TABLE, block, ((TdApi.PageBlockTable) block).caption,

@@ -9624,7 +9624,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     final @DrawableRes int icon = args.receiverRowIcon != 0 ? args.receiverRowIcon : R.drawable.baseline_arrow_upward_18;
     final CharSequence text = StringUtils.isEmpty(args.receiverRowText) ? (chat != null ? tdlib.chatTitle(chat) : null) : args.receiverRowText;
 
-    FrameLayoutFix.LayoutParams fp = FrameLayoutFix.newParams(ViewGroup.LayoutParams.WRAP_CONTENT, Screen.getStatusBarHeight());
+    FrameLayoutFix.LayoutParams fp = FrameLayoutFix.newParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
     if (topOffset > 0) {
       fp.leftMargin = Screen.dp(8f);
       fp.topMargin = topOffset + Screen.dp(4f);

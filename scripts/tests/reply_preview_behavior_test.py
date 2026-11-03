@@ -114,8 +114,10 @@ public class ReplyPreviewTest {
     return message;
   }
   static TdApi.InputTextQuote quote(String text, int position) {
-    return new TdApi.InputTextQuote(new TdApi.FormattedText(text, new TdApi.TextEntity[0]),
-                                    position);
+    TdApi.InputTextQuote quote = new TdApi.InputTextQuote();
+    quote.text = new TdApi.FormattedText(text, new TdApi.TextEntity[0]);
+    quote.position = position;
+    return quote;
   }
   void expectQuote(TdApi.InputTextQuote quote) {
     check(messagesAdapter.displayed().quote == quote, "Bind the latest quote to the view");

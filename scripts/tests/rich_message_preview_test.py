@@ -80,6 +80,21 @@ public class ContentPreview {
     check(preview.isTranslatable, "Media count must be translatable");
   }
   public static void main(String[] args) {
+    TdApi.InlineButton button = new TdApi.InlineButton(new TdApi.RichTextPlain("Join <now>"),
+      new TdApi.ButtonStylePrimary(), new TdApi.InlineKeyboardButtonTypeUrl("https://example.org/join"));
+    TdApi.RichMessage buttons = rich(new TdApi.PageBlockButtonRow(
+      new TdApi.InlineButton[] {null, button}, null));
+    check(RichMessageUtils.toPreviewText(buttons).text.equals("Join <now>"), "Preview button labels");
+    check(RichMessageUtils.toHtml(buttons).contains("href=\"https://example.org/join\""), "Export button link");
+    check(RichMessageUtils.toHtml(buttons).contains("Join &lt;now&gt;"), "Escape button labels");
+    check(!RichMessageUtils.toPlainText(buttons).contains("Unsupported"), "Recognize button rows");
+    check(RichMessageUtils.richTextToPlain(new TdApi.RichTextButton(button)).equals("Join <now>"),
+      "Copy inline button labels");
+    check(RichMessageFlattener.flatten(buttons, null).nodes.get(0).kind ==
+      RichMessageFlattener.KIND_BUTTONS, "Flatten button rows");
+    check(RichMessageUtils.toHtml(rich(new TdApi.PageBlockButtonRow(null, null))).contains("buttons"),
+      "Handle empty rows");
+
     TdApi.PageBlock[] photos = {photo(null), photo(null), photo(null)};
     TdApi.RichMessage collage = rich(new TdApi.PageBlockCollage(photos,
       new TdApi.PageBlockCaption(new TdApi.RichTextBold(

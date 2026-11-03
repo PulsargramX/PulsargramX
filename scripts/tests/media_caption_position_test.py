@@ -48,6 +48,10 @@ class MediaCaptionPositionTest(unittest.TestCase):
             "private void updateCaptionLayout ()", "private void checkBottomWrapY ()")
             .replace("View captionControl", "Control captionControl")
             .replace("View control", "Control control").replace("new View[]", "new Control[]"))
+        receiver = methods("mediaview/MediaViewController.java", "private LinearLayout buildReceiverRowView (")
+        receiver_layout = receiver[receiver.index("    FrameLayoutFix.LayoutParams fp ="):
+                                   receiver.index("    LinearLayout receiverView =")]
+        source = source.replace("RECEIVER_LAYOUT", receiver_layout)
         sources = [ROOT / "tdlib/src/main/java/org/drinkless/tdlib/TdApi.java"]
         for name, content in {
             "CaptionPositionTest.java": source,
@@ -163,7 +167,10 @@ public class CaptionPositionTest {
     PENDING_METHODS
   }
   static class ContentPreview {CAPTION_MESSAGE_METHOD}
-  static class Screen {static int dp(float n) {return Math.round(n);}}
+  static class Screen {
+    static int dp(float n) {return Math.round(n);}
+    static int getStatusBarHeight() {return 80;}
+  }
   static class Lang {static boolean rtl() {return false;}}
   static class Config {static final boolean MOVE_BUBBLE_TIME_RTL_TO_LEFT = false;}
   static class Canvas {
@@ -334,6 +341,12 @@ public class CaptionPositionTest {
       int gravity = Gravity.BOTTOM | Gravity.RIGHT, topMargin, bottomMargin, leftMargin, height = -2;
     }
   }
+  static class FrameLayoutFix extends FrameLayout {
+    static LayoutParams newParams(int width, int height) {
+      LayoutParams params = new LayoutParams(); params.height = height; return params;
+    }
+  }
+  static class ViewGroup {static class LayoutParams {static final int WRAP_CONTENT = -2;}}
   static class Control {
     static final int VISIBLE = 0;
     FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(); float y;
@@ -379,6 +392,10 @@ public class CaptionPositionTest {
       keyboardFrameLayout.parent = bottomWrap;
     }
     Preview inlineResultsView; void updatePosition(boolean animate) {}
+    FrameLayout.LayoutParams createReceiverLayout() {
+      RECEIVER_LAYOUT
+      return fp;
+    }
     PREVIEW_METHODS
   }
   static void previewTests() {
@@ -432,8 +449,14 @@ public class CaptionPositionTest {
     check(p.captionWrapView.params.topMargin == 132, "Measured large-font recipient rows also reserve their height");
     p.headerView = headerControl(p, 0, 160); p.checkCaptionButtonsY();
     check(p.captionWrapView.params.topMargin == 168, "Account for an attached header in media edit mode");
+    p.headerView.parent = null;
+    p.setTopOffset(80);
+    p.receiverView.params = p.createReceiverLayout(); p.receiverView.height = 17;
+    p.checkCaptionButtonsY();
+    check(p.captionWrapView.params.topMargin == p.checkView.params.topMargin + p.checkView.params.height + 8,
+      "Large status-bar insets must not leave an extra status-bar-sized gap below the recipient text");
     p.headerView.parent = null; p.checkView.parent = null; p.counterView.parent = null;
-    p.receiverView.visibility = View.GONE; p.checkCaptionButtonsY();
+    p.receiverView.visibility = View.GONE; p.setTopOffset(0); p.checkCaptionButtonsY();
     check(p.captionWrapView.params.topMargin == 8, "Detached and gone header controls do not reserve space");
     p.toggleCaptionPosition();
     check(p.captionWrapView.params.topMargin == 0 &&
