@@ -78,7 +78,11 @@ import tgx.td.ChatId;
 import tgx.td.MessageId;
 import tgx.td.Td;
 
-public class BetterChatView extends BaseView implements Destroyable, RemoveHelper.RemoveDelegate, ChatListener, TdlibCache.UserDataChangeListener, TdlibCache.SupergroupDataChangeListener, TdlibCache.BasicGroupDataChangeListener, NotificationSettingsListener, TdlibCache.UserStatusChangeListener, DrawableProvider, TooltipOverlayView.LocationProvider, TdlibUi.MessageProvider {
+public class BetterChatView extends BaseView implements Destroyable, RemoveHelper.RemoveDelegate,
+  ChatListener, TdlibCache.UserDataChangeListener, TdlibCache.SupergroupDataChangeListener,
+  TdlibCache.BasicGroupDataChangeListener, NotificationSettingsListener,
+  TdlibCache.UserStatusChangeListener, DrawableProvider, TooltipOverlayView.LocationProvider,
+  TdlibUi.MessageProvider, DateTimeView {
   private static final int FLAG_FAKE_TITLE = 1;
   private static final int FLAG_SECRET = 1 << 1;
   private static final int FLAG_ONLINE = 1 << 2;
@@ -571,8 +575,20 @@ public class BetterChatView extends BaseView implements Destroyable, RemoveHelpe
     }
   }
 
+  @Override
+  public void onDateOrTimeChanged () {
+    if (lastChat != null) {
+      updateSubtitle();
+      invalidate();
+    } else if (lastMessage != null) {
+      setTime(Lang.timeOrDateShort(lastMessage.getMessage().date, TimeUnit.SECONDS));
+      invalidate();
+    }
+  }
+
   public void setChat (@Nullable TGFoundChat chat) {
     if (chat == lastChat) {
+      onDateOrTimeChanged();
       return;
     }
     setSubtitleIcons(0, 0, ColorId.NONE);
@@ -786,6 +802,7 @@ public class BetterChatView extends BaseView implements Destroyable, RemoveHelpe
     if (lastChat != null) {
       setChatImpl(null);
     } else if (lastMessage == foundMessage) {
+      onDateOrTimeChanged();
       return;
     }
     setSubtitleIcons(0, 0, ColorId.NONE);

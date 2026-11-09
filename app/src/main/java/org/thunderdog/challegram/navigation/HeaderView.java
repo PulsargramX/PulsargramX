@@ -2138,10 +2138,12 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
     setBackgroundHeight(item.getHeaderHeight());
     if (navigation != null) {
       int floatingButtonId = item.getFloatingButtonId();
+      FloatingButton button = navigation.getFloatingButton();
       if (floatingButtonId != 0) {
-        FloatingButton button = navigation.getFloatingButton();
         button.setIcons(0, floatingButtonId);
         button.initHeightFactor(getHeightFactor(), 0f, 1f, false, false);
+      } else {
+        button.initHeightFactor(getHeightFactor(), 0f, 0f, false, false);
       }
     }
     filling.setColor(item.getHeaderColor());

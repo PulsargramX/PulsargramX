@@ -36,13 +36,16 @@ include(
   ":extension:bridge",
   ":extension:${extra["extension"]}",
 
-  ":app",
-
-  ":tests:baseline-profile",
-  ":tests:core",
-  ":tests:ui",
-  ":tests:benchmark",
-  ":tests:microbenchmark"
+  ":app"
 )
 // Keep upstream pins untouched; build the reviewed TDLib source overlay.
 project(":tdlib").projectDir = file("tdlib-overlay")
+if (settingsDir.resolve("tests/.git").exists()) {
+  include(
+    ":tests:baseline-profile",
+    ":tests:core",
+    ":tests:ui",
+    ":tests:benchmark",
+    ":tests:microbenchmark"
+  )
+}

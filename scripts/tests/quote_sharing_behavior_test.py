@@ -75,7 +75,7 @@ public class QuoteSharingTest {
       ChatOpenParameters keepStack() {keep = true; return this;}
     }
   }
-  static class R {static class string {static final int YouCantSendMessages = 1, QuoteTo = 2;}}
+  static class R {static class string {static final int YouCantSendMessages = 1, QuoteTo = 2, ShareFolderNoChats = 3;}}
   static class Toast {static final int LENGTH_SHORT = 0;}
   static class UI {static void showToast(int text, int duration) {}}
   static class ChatsController {
@@ -83,6 +83,7 @@ public class QuoteSharingTest {
       boolean onChatPicked(TdApi.Chat chat, Runnable onDone);
       Object getShareItem();
       int getTitleStringRes();
+      int getEmptyFolderStringRes();
       void modifyChatOpenParams(TdlibUi.ChatOpenParameters params);
     }
     static class Arguments {
@@ -98,6 +99,7 @@ public class QuoteSharingTest {
   }
   static class ChatPickerController extends ChatsController {
     boolean dismissed;
+    static void finishQuoteNavigation(MessagesController controller) {}
     void dismissAfterChatOpen() {dismissed=true;}
     ChatPickerController(Object context, Tdlib tdlib) {super(context, tdlib);}
   }
@@ -191,6 +193,8 @@ public class QuoteSharingTest {
           "Open the destination picker immediately without waiting for a header animation");
     check(tdlib.queued.isEmpty(), "Do not queue a delayed picker navigation");
     ChatsController.Arguments picker = source.picker.args;
+    check(picker.delegate.getEmptyFolderStringRes() == R.string.ShareFolderNoChats,
+      "Quote folders reuse forwarding illustration and sending-specific empty text");
     check(picker.delegate.getTitleStringRes() == R.string.QuoteTo,
           "Give the quote picker its own title");
     TdApi.Chat destination = chat(20, new TdApi.ChatTypePrivate(20));
@@ -208,7 +212,7 @@ public class QuoteSharingTest {
     check(picker.delegate.onChatPicked(destination, () -> {}), "Accept a writable destination");
     TdlibUi.ChatOpenParameters params = new TdlibUi.ChatOpenParameters();
     picker.delegate.modifyChatOpenParams(params);
-    check(params.keep, "Preserve the source channel in navigation history");
+    check(params.keep, "Keep outgoing screens alive until destination focuses");
     check(!((ChatPickerController)source.picker).dismissed && params.done != null,
       "Retain picker while opening destination");
     params.done.run();
@@ -328,7 +332,8 @@ public class QuoteSharingTest {
 
   def test_quote_picker_leaves_stack_only_when_destination_focuses(self):
     method = java_method(read(UI + "ChatPickerController.java"),
-                         "public void dismissAfterChatOpen ()")
+                         "public void dismissAfterChatOpen ()") + "\n" + java_method(
+      read(UI + "ChatPickerController.java"), "public static void finishQuoteNavigation (")
     harness = r'''
 import java.util.*;
 public class PickerBackTest {
@@ -362,10 +367,10 @@ public class PickerBackTest {
       picker.dismissAfterChatOpen();
       check(stack.contains(picker) && !picker.destroyed,"Retain outgoing picker during transition");
       target.focus();
-      check(picker.destroyed && stack.equals(Arrays.asList(source,otherPicker,target)),
-        "Remove quote picker instance after opening " + destinationType);
+      check(picker.destroyed && stack.equals(Arrays.asList(source,target)),
+        "Keep only chat list and destination after opening " + destinationType);
       stack.remove(target);
-      check(stack.get(stack.size()-1)==otherPicker,"Back skips the quote picker");
+      check(stack.get(stack.size()-1)==source,"Back returns to root chat list");
     }
     Picker failed=new Picker(); failed.context.nav.current=failed;
     failed.dismissAfterChatOpen();

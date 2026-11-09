@@ -341,14 +341,14 @@ public class ChatPickerController extends ViewPagerController<ChatsController.Ar
     if (destination == null || destination == this) {
       return;
     }
+    finishQuoteNavigation(destination);
+  }
+
+  public static void finishQuoteNavigation (ViewController<?> destination) {
     destination.addOneShotFocusListener(() -> {
-      // Keep the outgoing picker alive until the transition has finished.
-      // Remove this instance only, preserving the source chat and other pickers.
-      for (int i = 0; i < destination.stackSize() - 1; i++) {
-        if (destination.stackItemAt(i) == this) {
-          destination.destroyStackItemAt(i);
-          break;
-        }
+      // Preserve the root chat list and the destination only, after transition.
+      for (int i = destination.stackSize() - 2; i > 0; i--) {
+        destination.destroyStackItemAt(i);
       }
     });
   }

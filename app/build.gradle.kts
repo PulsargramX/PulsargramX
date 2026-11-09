@@ -1,7 +1,6 @@
 @file:Suppress("UnstableApiUsage", "AvoidApplyPluginMethod")
 
 import androidx.baselineprofile.gradle.consumer.BaselineProfileConsumerExtension
-import com.android.build.api.artifact.SingleArtifact
 import com.android.build.api.variant.BuildConfigField
 import com.android.build.api.variant.impl.VariantOutputImpl
 import com.android.build.gradle.tasks.ExternalNativeBuildTask
@@ -9,7 +8,6 @@ import org.gradle.kotlin.dsl.support.uppercaseFirstChar
 import tgx.gradle.*
 import tgx.gradle.source.GitInformationSource
 import tgx.gradle.task.*
-import tgx.test.configureTests
 import java.util.*
 
 plugins {
@@ -50,6 +48,15 @@ val validatePublicConfiguration = tasks.register("validatePublicConfiguration") 
       "Build the public edition from its separate public source checkout"
     }
   }
+}
+val customGoogleServices = if (selectedEdition == "personal") {
+  personalDirectory.resolve("google-services.json")
+} else {
+  file("src/public/google-services.json")
+}
+val hasFirebaseMessaging = hasGoogleServicesClient(customGoogleServices, config.applicationId)
+if (!hasFirebaseMessaging) {
+  logger.warn("Firebase configuration has no client for ${config.applicationId}")
 }
 val useLegacyPackaging = tgxConfig.useLegacyPackaging.get()
 val useLegacyNdk = tgxConfig.useLegacyNdk.get()
@@ -450,6 +457,13 @@ android {
     resValue("string", "AppName", config.applicationName)
     resValue("string", "account_type", "${config.applicationId}.sync.account")
     resValue("string", "content_authority", "${config.applicationId}.sync.provider")
+
+    if (hasFirebaseMessaging) {
+      googleServicesValues(customGoogleServices, config.applicationId).forEach { (name, value) ->
+        resValue("string", name, value)
+      }
+    }
+    buildConfigBool("FIREBASE_MESSAGING_ENABLED", hasFirebaseMessaging)
 
     buildConfigString("PROJECT_NAME", config.applicationName)
     buildConfigString("SAFETYNET_API_KEY", config.safetyNetToken)
@@ -1065,22 +1079,6 @@ android {
         )
       }
 
-      if (variant.isMinifyEnabled) {
-        val variantName = variant.name.uppercaseFirstChar()
-        val copyTask = project.tasks.register<Copy>(
-          "copy${variantName}MappingFile"
-        ) {
-          description = "Creates a copy of mapping.txt with a build name"
-          from(variant.artifacts.get(SingleArtifact.OBFUSCATION_MAPPING_FILE))
-          into(project.layout.buildDirectory.dir("outputs/mapping/${variant.name}"))
-          val prefix = if (edition == "public") "Pulsargram-X" else config.outputFileNamePrefix
-          val mappingFileName = "$prefix-$baseVersionName.$baseVersionCode$flavorVersionNameSuffix$buildTypeSuffix"
-          rename("mapping.txt", "$mappingFileName.txt")
-        }
-        tasks.named { it == "assemble$variantName" }.configureEach {
-          finalizedBy(copyTask)
-        }
-      }
     }
   }
 
@@ -1106,7 +1104,10 @@ android {
   }
 }
 
-configureTests()
+val hasTests = rootDir.resolve("tests/.git").exists()
+if (hasTests) {
+  apply(plugin = "tgx-tests-app")
+}
 
 extensions.configure<BaselineProfileConsumerExtension> {
   mergeIntoMain = false
@@ -1114,11 +1115,13 @@ extensions.configure<BaselineProfileConsumerExtension> {
   saveInSrc = true
   warnings.disabledVariants = false
   warnings.variantHasNoBaselineProfileDependency = false
-  Sdk.VARIANTS.values.filter {
-    it.usesBaselineProfile
-  }.forEach { variant ->
-    variants.create("${selectedEdition}${variant.flavor.uppercaseFirstChar()}Release")
-      .from(project(":tests:baseline-profile"))
+  if (hasTests) {
+    Sdk.VARIANTS.values.filter {
+      it.usesBaselineProfile
+    }.forEach { variant ->
+      variants.create("${selectedEdition}${variant.flavor.uppercaseFirstChar()}Release")
+        .from(project(":tests:baseline-profile"))
+    }
   }
 }
 
@@ -1360,13 +1363,13 @@ dependencies {
   compileOnly(libs.annotations.jsr305)
   compileOnly(libs.annotations.kotlin)
 
-  // Tests: tests/README.md
-  testImplementation(libs.bundles.unit.test)
-  androidTestImplementation(project(":tests:core"))
+  if (hasTests) {
+    testImplementation(libs.bundles.unit.test)
+    androidTestImplementation(project(":tests:core"))
+  }
 }
 
 if (!config.isExperimentalBuild) {
-  apply(plugin = libs.plugins.google.services.get().pluginId)
   if (config.isHuaweiBuild) {
     apply(plugin = libs.huawei.agconnect.get().group)
   }

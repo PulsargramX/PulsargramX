@@ -949,6 +949,9 @@ public class ForumTopicsController extends TelegramViewController<ForumTopicsCon
     );
     args.setForumTopic(topic);
     controller.setArguments(args);
+    if (getArguments().shareItem instanceof MessagesController.ReplyInfo) {
+      ChatPickerController.finishQuoteNavigation(controller);
+    }
     navigateTo(controller);
   }
 
@@ -972,6 +975,9 @@ public class ForumTopicsController extends TelegramViewController<ForumTopicsCon
     args.setForumTopic(topic);
     controller.setArguments(args);
     navigatedFromSearch = true; // Mark that we're navigating from search results
+    if (getArguments().shareItem instanceof MessagesController.ReplyInfo) {
+      ChatPickerController.finishQuoteNavigation(controller);
+    }
     navigateTo(controller);
   }
 

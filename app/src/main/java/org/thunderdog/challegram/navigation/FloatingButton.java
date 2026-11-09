@@ -106,6 +106,7 @@ public class FloatingButton extends View implements Destroyable, RootFrameLayout
 
   @Override
   public void performDestroy () {
+    cancelVisibilityAnimation();
     if (rootView != null) {
       rootView.removeInsetsChangeListener(this);
       rootView = null;
@@ -171,6 +172,15 @@ public class FloatingButton extends View implements Destroyable, RootFrameLayout
   private boolean translateFully;
 
   private Animator.AnimatorListener hideListener;
+  private ValueAnimator visibilityAnimator;
+
+  private void cancelVisibilityAnimation () {
+    animate().cancel();
+    if (visibilityAnimator != null) {
+      visibilityAnimator.cancel();
+      visibilityAnimator = null;
+    }
+  }
 
   private boolean touchEnabled;
 
@@ -197,14 +207,18 @@ public class FloatingButton extends View implements Destroyable, RootFrameLayout
     translateFully = translation;
     if (toHeightFactor == fromHeightFactor) {
       setTranslationY((1f - heightFactor) * heightDiff);
-    } else {
-      setHeightFactor(heightFactor, scaleFactor, animate);
     }
+    setHeightFactor(heightFactor, scaleFactor, animate);
   }
 
   @SuppressWarnings ("SuspiciousNameCombination")
   public void setHeightFactor (float heightFactor, float scaleFactor, boolean animate) {
-    if (this.heightFactor != heightFactor || this.scaleFactor != scaleFactor) {
+    // Navigation owns alpha and scale directly. A profile scroll animation must not
+    // keep writing them after the profile has left the screen.
+    if (!animate) {
+      cancelVisibilityAnimation();
+    }
+    if (!animate || this.heightFactor != heightFactor || this.scaleFactor != scaleFactor) {
       this.heightFactor = heightFactor;
       this.scaleFactor = scaleFactor;
       if (translateFully) {
@@ -216,11 +230,13 @@ public class FloatingButton extends View implements Destroyable, RootFrameLayout
         if (heightFactor == 0f) {
           if (isShowing) {
             isShowing = false;
+            cancelVisibilityAnimation();
             Views.animate(this, 0f, 0f, 0f, OVERSHOOT_DURATION, AnimatorUtils.ANTICIPATE_OVERSHOOT_INTERPOLATOR, getHideListener());
           }
         } else {
           if (!isShowing) {
             isShowing = true;
+            cancelVisibilityAnimation();
             setTouchEnabled(true);
             Views.animate(this, 1f, 1f, 1f, OVERSHOOT_DURATION, AnimatorUtils.ANTICIPATE_OVERSHOOT_INTERPOLATOR, null);
           }
@@ -337,6 +353,7 @@ public class FloatingButton extends View implements Destroyable, RootFrameLayout
     int height = c.getHeaderHeight();
     float heightFactor = (float) (height - Size.getHeaderPortraitSize()) / (float) Size.getMaximumHeaderSizeDifference();
 
+    cancelVisibilityAnimation();
     isShowing = true;
 
     setTouchEnabled(true);
@@ -351,12 +368,14 @@ public class FloatingButton extends View implements Destroyable, RootFrameLayout
     obj.setInterpolator(AnimatorUtils.ANTICIPATE_OVERSHOOT_INTERPOLATOR);
     obj.setDuration(OVERSHOOT_DURATION);
 
+    visibilityAnimator = obj;
     obj.start();
   }
 
   public void hide () {
     if (isShowing) {
       isShowing = false;
+      cancelVisibilityAnimation();
 
       showFactor = 1f;
 
@@ -367,6 +386,7 @@ public class FloatingButton extends View implements Destroyable, RootFrameLayout
       obj.setInterpolator(AnimatorUtils.ANTICIPATE_OVERSHOOT_INTERPOLATOR);
       obj.setDuration(OVERSHOOT_DURATION);
       obj.addListener(getHideListener());
+      visibilityAnimator = obj;
       obj.start();
     }
   }

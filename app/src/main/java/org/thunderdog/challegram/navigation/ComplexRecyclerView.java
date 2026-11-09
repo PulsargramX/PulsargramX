@@ -118,7 +118,7 @@ public class ComplexRecyclerView extends CustomRecyclerView implements Runnable 
   }
 
   private void updateScrollFactor (boolean updateFilling) {
-    if (target.inCustomMode() && (flags & FLAG_FORCE) == 0) {
+    if ((factorLocked || target.inCustomMode()) && (flags & FLAG_FORCE) == 0) {
       return;
     }
     View view = getLayoutManager().findViewByPosition(0);

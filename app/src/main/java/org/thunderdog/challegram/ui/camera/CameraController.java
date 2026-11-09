@@ -39,6 +39,7 @@ import android.view.ViewGroup;
 import android.widget.TextView;
 
 import androidx.annotation.AnyThread;
+import androidx.annotation.ChecksSdkIntAtLeast;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.StringRes;
@@ -260,10 +261,10 @@ public class CameraController extends ViewController<Void> implements CameraDele
     contentShadow.setSimpleBottomTransparentShadow(true);
     rootLayout.addView(contentShadow);
 
-    if (needLegacy()) {
-      manager = new CameraManagerLegacy(context, this);
-    } else {
+    if (needCameraX()) {
       manager = new CameraManagerX(context, this);
+    } else {
+      manager = new CameraManagerLegacy(context, this);
     }
 
     contentView.addView(manager.getView());
@@ -295,6 +296,11 @@ public class CameraController extends ViewController<Void> implements CameraDele
     return type == Settings.CAMERA_TYPE_SYSTEM ? Settings.CAMERA_TYPE_DEFAULT == Settings.CAMERA_TYPE_LEGACY : type == Settings.CAMERA_TYPE_LEGACY;
   }
 
+  @ChecksSdkIntAtLeast(api = Build.VERSION_CODES.LOLLIPOP)
+  private boolean needCameraX () {
+    return !needLegacy();
+  }
+
   private void setForceLegacy (boolean forceLegacy) {
     if (this.forceLegacy != forceLegacy) {
       this.forceLegacy = forceLegacy;
@@ -312,10 +318,10 @@ public class CameraController extends ViewController<Void> implements CameraDele
         manager.destroy();
         manager = null;
       }
-      if (needLegacy()) {
-        manager = new CameraManagerLegacy(context, this);
-      } else {
+      if (needCameraX()) {
         manager = new CameraManagerX(context, this);
+      } else {
+        manager = new CameraManagerLegacy(context, this);
       }
       contentView.addView(manager.getView(), contentView.getChildCount() - 1);
     }

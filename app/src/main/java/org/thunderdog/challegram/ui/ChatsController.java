@@ -195,6 +195,7 @@ public class ChatsController extends TelegramViewController<ChatsController.Argu
   public interface PickerDelegate {
     boolean onChatPicked (TdApi.Chat chat, Runnable onDone);
     default Object getShareItem () { return null; }
+    default int getEmptyFolderStringRes () { return 0; }
     default void modifyChatOpenParams (TdlibUi.ChatOpenParameters params) { }
     default int getTitleStringRes () {
       return R.string.SelectChat;
@@ -2480,7 +2481,12 @@ public class ChatsController extends TelegramViewController<ChatsController.Argu
     ArrayList<ListItem> items = new ArrayList<>(5);
 
     TdApi.ChatList chatList = chatList();
-    if (pickerDelegate != null && filter != null &&
+    if (chatList instanceof TdApi.ChatListFolder && pickerDelegate != null &&
+        pickerDelegate.getEmptyFolderStringRes() != 0) {
+      items.add(new ListItem(ListItem.TYPE_ICONIZED_EMPTY, 0,
+        R.drawable.baseline_folder_open_96,
+        Lang.getMarkdownString(this, pickerDelegate.getEmptyFolderStringRes())));
+    } else if (pickerDelegate != null && filter != null &&
         filter.getEmptyStringRes() == R.string.NoGroupsToShow &&
         chatList instanceof TdApi.ChatListFolder) {
       items.add(new ListItem(ListItem.TYPE_ICONIZED_EMPTY, 0,
@@ -2981,6 +2987,11 @@ public class ChatsController extends TelegramViewController<ChatsController.Argu
     if (!isDestroyed() && chatsView != null) {
       chatsView.updateRelativeDate();
     }
+  }
+
+  @Override
+  public void onTimeFormatChanged () {
+    onDateChanged();
   }
 
   @Override
