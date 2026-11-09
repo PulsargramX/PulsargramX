@@ -419,6 +419,19 @@ class BuildCacheTest(unittest.TestCase):
       self.assertEqual((self.source / "app.txt").read_text(), "user's uncommitted edit\n")
       self.assertEqual(self.git(self.target, "remote", "get-url", "origin").strip(), self.origin)
 
+  def test_fetches_from_origin_when_local_source_lacks_revision(self):
+    remote = self.root / "remote"
+    subprocess.check_call(["git", "clone", "-q", str(self.source), str(remote)])
+    self.git(remote, "config", "user.name", "Build check")
+    self.git(remote, "config", "user.email", "build@example.invalid")
+    (remote / "app.txt").write_text("remote revision\n")
+    self.git(remote, "commit", "-qam", "Remote update")
+    revision = self.git(remote, "rev-parse", "HEAD").strip()
+    with patch.object(BUILD, "SOURCE", self.source):
+      BUILD.checkout(self.target, self.source, revision, str(remote))
+    self.assertEqual((self.target / "app.txt").read_text(), "remote revision\n")
+    self.assertEqual((self.source / "app.txt").read_text(), "user's uncommitted edit\n")
+
   def test_manual_tracked_cache_edits_are_rejected(self):
     with patch.object(BUILD, "SOURCE", self.source):
       BUILD.checkout(self.target, self.source, self.first, self.origin)

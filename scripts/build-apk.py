@@ -196,8 +196,13 @@ def checkout(destination, source, revision, origin):
   try:
     git(destination, "cat-file", "-e", revision + "^{commit}")
   except BuildError:
-    git(destination, "fetch", "--no-tags", str(source) if source_ready else "origin",
-        revision)
+    if source_ready:
+      try:
+        git(destination, "fetch", "--no-tags", str(source), revision)
+      except BuildError:
+        git(destination, "fetch", "--no-tags", "origin", revision)
+    else:
+      git(destination, "fetch", "--no-tags", "origin", revision)
   if hydrated and git(destination, "rev-parse", "HEAD").decode().strip() != revision:
     # All inputs were verified before writing anything. Restore only binaries
     # that match this commit, so Git can switch revisions without LFS filters.
