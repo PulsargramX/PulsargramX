@@ -1779,7 +1779,7 @@ public class Text implements Runnable, Emoji.CountLimiter, CounterTextPart, List
         newLineOrEllipsis(out, in);
       }
       int quoteFlags = quoteCheckAndMakeNewLines(in, start, end, out, entity);
-      quoteShiftCords(quoteFlags);
+      quoteShiftCords(quoteFlags, in, entity);
       maxWidth = Math.max(1, getLineMaxWidth(getLineCount(), currentY));
       if (formulaWidth > maxWidth) {
         formulaHeight = Math.max(1,

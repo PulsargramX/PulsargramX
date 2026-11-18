@@ -2163,7 +2163,7 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
       return false;
     }
     final ViewGroup parent = (ViewGroup) view.getParent();
-    final View lastView = findBottomView();
+    final View lastView = manager.findViewByPosition(0);
     // The list moves up above bars of a reply and of files and with the keyboard
     rules.listTop = controller.getTopOffset() - Math.round(parent.getTranslationY());
     rules.endBottom = parent.getMeasuredHeight() - parent.getPaddingBottom();
