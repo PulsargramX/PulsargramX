@@ -16,9 +16,10 @@ package org.thunderdog.challegram.telegram;
 
 import android.app.Notification;
 import android.app.NotificationManager;
+import android.content.ContentResolver;
 import android.content.Context;
-import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.res.Resources;
 import android.media.AudioManager;
 import android.media.RingtoneManager;
 import android.media.SoundPool;
@@ -33,6 +34,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RawRes;
 import androidx.annotation.RequiresApi;
+import androidx.annotation.StringRes;
 import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.ContextCompat;
 
@@ -66,12 +68,16 @@ import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 
 import me.vkryl.core.BitwiseUtils;
 import me.vkryl.core.FileUtils;
+import me.vkryl.core.ObjectUtils;
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.lambda.RunnableData;
 import me.vkryl.leveldb.LevelDB;
@@ -84,8 +90,10 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
   public static final int ID_FOREGROUND_ONGOING_CALL_NOTIFICATION = Integer.MAX_VALUE - 3;
   public static final int ID_FOREGROUND_INCOMING_CALL_NOTIFICATION = Integer.MAX_VALUE - 4;
   public static final int ID_FOREGROUND_PENDING_TASK = Integer.MAX_VALUE - 5;
+  public static final int ID_FOREGROUND_CALL_START = Integer.MAX_VALUE - 6;
 
-  public static final int IDS_PER_ACCOUNT = (int) ((long) (Integer.MAX_VALUE - 6) / (long) TdlibAccount.ID_MAX) - 1;
+  public static final int IDS_PER_ACCOUNT =
+    (int) ((long) (Integer.MAX_VALUE - 7) / (long) TdlibAccount.ID_MAX) - 1;
 
   public static String getMessageNotificationTag (int accountId, int category) {
     String prefix = switch (category) {
@@ -137,6 +145,9 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
   private static final int UPDATE_CHANNEL_SETTINGS = 25;
   private static final int CREATE_CHANNELS = 26;
   private static final int UPDATE_CHAT_CHANNEL = 27;
+  private static final int UPDATE_CALL_CHANNEL_SETTINGS = 28;
+  private static final int DELETE_STALE_CHANNELS = 29;
+  private static final int RESET_CALL_CHANNELS = 30;
 
   @SuppressWarnings("DeprecatedIsStillUsed")
   @Deprecated
@@ -174,6 +185,13 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
   private static final String _CHANNEL_VERSION_GLOBAL_KEY = "channels_version_global"; // resets all channels
   static final String KEY_PREFIX_CHANNEL_VERSION = "channels_version_"; // resets only default private chat settings
   private static final String _CHANNEL_VERSION_CUSTOM_KEY = "channels_version_custom_"; // resets only specific chat channel
+  private static final String KEY_CHANNEL_VERSION_CALLS = "channels_version_calls";
+  private static final String KEY_PREFIX_CHANNEL_VERSION_CALLS_CUSTOM =
+    "channels_version_calls_custom_";
+  private static final String KEY_PREFIX_CHANNEL_MADE_VERSION_CUSTOM =
+    "channels_made_version_custom_";
+  private static final String KEY_PREFIX_CHANNEL_MADE_SETTINGS_CUSTOM =
+    "channels_made_settings_custom_";
 
   @SuppressWarnings("DeprecatedIsStillUsed")
   @Deprecated
@@ -254,12 +272,15 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
   public static final int VIBRATE_MODE_SHORT = 1;
   public static final int VIBRATE_MODE_LONG = 2;
   public static final int VIBRATE_MODE_DISABLED = 3;
+  // Calls of a user that vibrate as calls of the system while the account doesn't
+  public static final int VIBRATE_MODE_ENABLED = 4;
 
   public static final long[] VIBRATE_SHORT_PATTERN = {0, 100, 0, 100};
   public static final long[] VIBRATE_LONG_PATTERN = {0, 1000};
 
   public static final long[] VIBRATE_CALL_SHORT_PATTERN = {0, 140, 0, 140, 750};
   public static final long[] VIBRATE_CALL_LONG_PATTERN = {0, 1000, 1000};
+  private static final long[] VIBRATE_FALLBACK_PATTERN = {0, 250, 250, 250};
 
   public static final int[] LED_COLORS =
     {0xffffffff, 0xff0000ff, 0xffff0000, 0xffff8e01, 0xffffff00, 0xff00ff00, 0xff00ffff, 0xffd274f9, 0xffff00ff};
@@ -364,6 +385,7 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
         case CLEANUP_CHANNELS: {
           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             TdlibNotificationChannelGroup.cleanupChannelGroups(context);
+            TdlibNotificationChannelGroup.deleteLegacyCallChannels();
           }
           break;
         }
@@ -382,6 +404,7 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
               tdlib.settings().trackNotificationChannelProblem(e, 0);
             }
             TdlibNotificationChannelGroup.cleanupChannels(tdlib);
+            TelegramCallRingtone.install();
           }
           break;
         }
@@ -480,6 +503,33 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             long chatId = BitwiseUtils.mergeLong(arg1, arg2);
             ((TdlibNotificationManager) object).updateChatChannelImpl(chatId);
+          }
+          break;
+        }
+        case UPDATE_CALL_CHANNEL_SETTINGS: {
+          Object[] data = (Object[]) object;
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ((TdlibNotificationManager) data[0]).updateCallChannelSettingsImpl(
+              (long) data[1],
+              (long) data[2],
+              (boolean) data[3]
+            );
+          }
+          data[0] = data[1] = data[2] = data[3] = null;
+          break;
+        }
+        case RESET_CALL_CHANNELS: {
+          Object[] data = (Object[]) object;
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ((TdlibNotificationManager) data[0]).resetCallChannelsImpl((long) data[1]);
+          }
+          data[0] = data[1] = null;
+          break;
+        }
+        case DELETE_STALE_CHANNELS: {
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Tdlib tdlib = ((TdlibNotificationManager) object).tdlib;
+            TdlibNotificationChannelGroup.cleanupChannels(tdlib);
           }
           break;
         }
@@ -606,6 +656,7 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
       case Status.DISABLED_SYNC:
       case Status.PUSH_SERVICE_MISSING:
       case Status.PUSH_SERVICE_ERROR:
+      case Status.BACKGROUND_RESTRICTED:
 
       case Status.INTERNAL_ERROR:
         return true;
@@ -622,7 +673,15 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
   }
 
   private boolean hasRemotePushService () {
-    return DeviceTokenRetrieverInstance.get().isAvailable(AppContext.get());
+    return isHuaweiPushWorking() ||
+      DeviceTokenRetrieverInstance.get().isAvailable(AppContext.get());
+  }
+
+  private boolean isHuaweiPushWorking () {
+    TdlibManager context = tdlib.context();
+    TdApi.DeviceToken token = context.getToken();
+    return token != null && token.getConstructor() == TdApi.DeviceTokenHuaweiPush.CONSTRUCTOR &&
+      context.getTokenState() == TdlibManager.TokenState.OK;
   }
 
   private boolean isSyncDisabledGlobally () {
@@ -644,7 +703,8 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
     Status.INTERNAL_ERROR,
     Status.ACCOUNT_NOT_SELECTED,
     Status.PUSH_SERVICE_ERROR,
-    Status.MISSING_PERMISSION
+    Status.MISSING_PERMISSION,
+    Status.BACKGROUND_RESTRICTED
   })
   public @interface Status {
     int
@@ -657,27 +717,33 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
       INTERNAL_ERROR = 6,
       ACCOUNT_NOT_SELECTED = 7,
       PUSH_SERVICE_ERROR = 8,
-      MISSING_PERMISSION = 9;
+      MISSING_PERMISSION = 9,
+      BACKGROUND_RESTRICTED = 10;
   }
 
   public @Status
   int getNotificationBlockStatus () {
+    return getBlockStatus(false);
+  }
+
+  public @Status int getCallBlockStatus () {
+    return getBlockStatus(true);
+  }
+
+  private @Status int getBlockStatus (boolean isCall) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
       if (ContextCompat.checkSelfPermission(AppContext.get(), android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
         return Status.MISSING_PERMISSION;
       }
     }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-      long selfUserId = tdlib.myUserId();
-      if (selfUserId != 0) {
-        android.app.NotificationChannelGroup group = (android.app.NotificationChannelGroup) getSystemChannelGroup();
-        if (group != null && group.isBlocked()) {
-          return Status.BLOCKED_CATEGORY;
-        }
-      }
-    }
     if (!NotificationManagerCompat.from(AppContext.get()).areNotificationsEnabled()) {
       return Status.BLOCKED_ALL;
+    }
+    if (isChannelGroupBlocked()) {
+      return Status.BLOCKED_CATEGORY;
+    }
+    if (CallProblems.isBackgroundRestricted(AppContext.get())) {
+      return Status.BACKGROUND_RESTRICTED;
     }
     boolean hasPushServices = hasRemotePushService();
     if (!hasPushServices) {
@@ -688,13 +754,79 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
         return Status.DISABLED_APP_SYNC;
       return Status.PUSH_SERVICE_MISSING;
     }
-    if (tdlib.settings().hasNotificationProblems())
-      return Status.INTERNAL_ERROR;
-    if (!tdlib.account().forceEnableNotifications() && Settings.instance().checkNotificationFlag(Settings.NOTIFICATION_FLAG_ONLY_SELECTED_ACCOUNTS))
-      return Status.ACCOUNT_NOT_SELECTED;
+    if (!isCall) {
+      if (tdlib.settings().hasNotificationProblems()) {
+        return Status.INTERNAL_ERROR;
+      }
+      if (!tdlib.account().forceEnableNotifications() && Settings.instance().checkNotificationFlag(
+        Settings.NOTIFICATION_FLAG_ONLY_SELECTED_ACCOUNTS)) {
+        return Status.ACCOUNT_NOT_SELECTED;
+      }
+    }
     if (tdlib.context().getTokenState() == TdlibManager.TokenState.ERROR)
       return Status.PUSH_SERVICE_ERROR;
     return Status.NOT_BLOCKED;
+  }
+
+  private boolean isChannelGroupBlocked () {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+      Object group = getSystemChannelGroup();
+      return group != null && ((android.app.NotificationChannelGroup) group).isBlocked();
+    }
+    return false;
+  }
+
+  public boolean canPostCallNotifications () {
+    return NotificationManagerCompat.from(AppContext.get()).areNotificationsEnabled() &&
+      !isChannelGroupBlocked();
+  }
+
+  public @StringRes int getBlockedScopesDescription () {
+    return getBlockedScopesText(false);
+  }
+
+  public @StringRes int getBlockedScopesGuide () {
+    return getBlockedScopesText(true);
+  }
+
+  private @StringRes int getBlockedScopesText (boolean isGuide) {
+    boolean blockedPrivate = areNotificationsBlocked(scopePrivate());
+    boolean blockedGroup = areNotificationsBlocked(scopeGroup());
+    boolean blockedChannel = areNotificationsBlocked(scopeChannel());
+    int scopeCount = (blockedPrivate ? 1 : 0) + (blockedGroup ? 1 : 0) + (blockedChannel ? 1 : 0);
+    if (scopeCount > 1) {
+      return isGuide ?
+        R.string.NotificationsGuideBlockedMixed :
+        R.string.NotificationsErrorBlockedMixed;
+    } else if (blockedPrivate) {
+      return isGuide ?
+        R.string.NotificationsGuideBlockedPrivate :
+        R.string.NotificationsErrorBlockedPrivate;
+    } else if (blockedGroup) {
+      return isGuide ?
+        R.string.NotificationsGuideBlockedGroup :
+        R.string.NotificationsErrorBlockedGroup;
+    } else if (blockedChannel) {
+      return isGuide ?
+        R.string.NotificationsGuideBlockedChannel :
+        R.string.NotificationsErrorBlockedChannel;
+    }
+    return 0;
+  }
+
+  public @Nullable TdApi.NotificationSettingsScope findSingleBlockedScope () {
+    TdApi.NotificationSettingsScope blockedScope = null;
+    for (TdApi.NotificationSettingsScope scope : new TdApi.NotificationSettingsScope[] {
+      scopePrivate(), scopeGroup(), scopeChannel()
+    }) {
+      if (areNotificationsBlocked(scope)) {
+        if (blockedScope != null) {
+          return null;
+        }
+        blockedScope = scope;
+      }
+    }
+    return blockedScope;
   }
 
   public boolean areNotificationsBlocked (TdApi.NotificationSettingsScope scope) {
@@ -760,13 +892,23 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
     return false;
   }
 
+  public boolean isDefaultVibrateModeChanged (
+    TdApi.NotificationSettingsScope scope,
+    int vibrateMode,
+    boolean onlyIfSilent
+  ) {
+    return getDefaultVibrateMode(scope) != vibrateMode ||
+      (Config.VIBRATE_ONLY_IF_SILENT_AVAILABLE &&
+        getDefaultVibrateOnlyIfSilent(scope) != onlyIfSilent);
+  }
+
   /**
    * @param scope scope
    * @param vibrateMode desired vibrate mode value
    * @param onlyIfSilent desired vibrate mode silence value
    */
   public boolean setDefaultVibrateMode (TdApi.NotificationSettingsScope scope, int vibrateMode, boolean onlyIfSilent) {
-    if (getDefaultVibrateMode(scope) != vibrateMode || (Config.VIBRATE_ONLY_IF_SILENT_AVAILABLE && getDefaultVibrateOnlyIfSilent(scope) != onlyIfSilent)) {
+    if (isDefaultVibrateModeChanged(scope, vibrateMode, onlyIfSilent)) {
       LocalScopeNotificationSettings settings = getLocalNotificationSettings(scope);
       settings.setVibrateMode(vibrateMode, onlyIfSilent);
       LevelDB editor = Settings.instance().edit();
@@ -1038,10 +1180,10 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
   }
 
   public static Uri fixSoundUri (@NonNull Uri uri, boolean allowCopy, @Nullable String forceFileName) {
-    if (uri.equals(android.provider.Settings.System.DEFAULT_RINGTONE_URI) || uri.equals(android.provider.Settings.System.DEFAULT_NOTIFICATION_URI))
+    if (isDefaultSoundUri(uri))
       return null;
     if ("content".equals(uri.getScheme())) {
-      if (Config.FILE_PROVIDER_AUTHORITY.equals(uri.getAuthority()) && uri.getPath().matches("^/ringtones/(?!\\.\\.)[^/]+$")) {
+      if (isCopiedSoundUri(uri)) {
         return uri;
       }
       String filePath = U.tryResolveFilePath(uri);
@@ -1077,6 +1219,22 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
     return uri;
   }
 
+  private static boolean isDefaultSoundUri (@NonNull Uri uri) {
+    return uri.equals(android.provider.Settings.System.DEFAULT_RINGTONE_URI) ||
+      uri.equals(android.provider.Settings.System.DEFAULT_NOTIFICATION_URI) ||
+      uri.equals(getTelegramCallRingtone());
+  }
+
+  private static boolean isCopiedSoundUri (@NonNull Uri uri) {
+    return Config.FILE_PROVIDER_AUTHORITY.equals(uri.getAuthority()) &&
+      uri.getPath().matches("^/ringtones/(?!\\.\\.)[^/]+$");
+  }
+
+  public static boolean needsSoundCopy (@NonNull Uri uri) {
+    return !isDefaultSoundUri(uri) && "content".equals(uri.getScheme()) &&
+      !isCopiedSoundUri(uri);
+  }
+
   public boolean isDefaultSoundEnabled (TdApi.NotificationSettingsScope scope) {
     return !"".equals(getDefaultSound(scope));
   }
@@ -1099,10 +1257,24 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
     return settings.getSoundPath();
   }
 
-  public boolean setDefaultSound (TdApi.NotificationSettingsScope scope, @Nullable String newSound, @Nullable String newSoundName, @Nullable String newSoundPath) {
-    newSound = fixSoundUri(newSound);
+  public boolean isDefaultSoundChanged (
+    TdApi.NotificationSettingsScope scope,
+    @Nullable String newSound,
+    @Nullable String newSoundName,
+    @Nullable String newSoundPath
+  ) {
     LocalScopeNotificationSettings settings = getLocalNotificationSettings(scope);
-    if (!compareSounds(settings.getSound(), newSound) || !StringUtils.equalsOrBothEmpty(settings.getSoundName(), newSoundName) || !StringUtils.equalsOrBothEmpty(settings.getSoundPath(), newSoundPath)) {
+    String sound = fixSoundUri(newSound);
+    return !compareSounds(settings.getSound(), sound) ||
+      !compareSounds(getDefaultSound(scope), sound) ||
+      !StringUtils.equalsOrBothEmpty(settings.getSoundName(), newSoundName) ||
+      !StringUtils.equalsOrBothEmpty(settings.getSoundPath(), newSoundPath);
+  }
+
+  public boolean setDefaultSound (TdApi.NotificationSettingsScope scope, @Nullable String newSound, @Nullable String newSoundName, @Nullable String newSoundPath) {
+    LocalScopeNotificationSettings settings = getLocalNotificationSettings(scope);
+    if (isDefaultSoundChanged(scope, newSound, newSoundName, newSoundPath)) {
+      newSound = fixSoundUri(newSound);
       settings.setSound(newSound, newSoundName, newSoundPath);
       LevelDB editor = Settings.instance().edit();
       if (newSound != null)
@@ -1200,17 +1372,49 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
   // Private
 
   public void setCustomCallVibrate (long chatId, int mode, boolean vibrateOnlyIfSilent) {
+    int oldMode = getCustomCallVibrateModeForChat(chatId);
+    LevelDB editor = Settings.instance().edit();
     if (mode == VIBRATE_MODE_DEFAULT) {
-      Settings.instance().edit().remove(key(_CUSTOM_CALL_VIBRATE_KEY + chatId)).remove(key(_CUSTOM_CALL_VIBRATE_ONLYSILENT_KEY + chatId)).apply();
-    } else if (Config.VIBRATE_ONLY_IF_SILENT_AVAILABLE) {
-      Settings.instance().edit().putInt(key(_CUSTOM_CALL_VIBRATE_KEY + chatId), mode).putBoolean(key(_CUSTOM_CALL_VIBRATE_ONLYSILENT_KEY + chatId), vibrateOnlyIfSilent).apply();
+      editor.remove(key(_CUSTOM_CALL_VIBRATE_KEY + chatId));
+      editor.remove(key(_CUSTOM_CALL_VIBRATE_ONLYSILENT_KEY + chatId));
     } else {
-      Settings.instance().putInt(key(_CUSTOM_CALL_VIBRATE_KEY + chatId), mode);
+      editor.putInt(key(_CUSTOM_CALL_VIBRATE_KEY + chatId), mode);
+      if (Config.VIBRATE_ONLY_IF_SILENT_AVAILABLE) {
+        editor.putBoolean(key(_CUSTOM_CALL_VIBRATE_ONLYSILENT_KEY + chatId), vibrateOnlyIfSilent);
+      }
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && oldMode != mode) {
+      incrementCallChannelVersion(chatId, false, editor);
+    } else {
+      editor.apply();
     }
   }
 
-  public int getCustomCallVibrateModeForChat (long chatId) {
+  public int getSavedCustomCallVibrateMode (long chatId) {
     return Settings.instance().getInt(key(_CUSTOM_CALL_VIBRATE_KEY + chatId), VIBRATE_MODE_DEFAULT);
+  }
+
+  public int getCustomCallVibrateModeForChat (long chatId) {
+    int channelMode = getCallChannelVibrateMode(chatId, getSavedCustomCallVibrateMode(chatId));
+    // Its channel tells only that it vibrates, by default, which is the opposite of the account
+    if (channelMode == VIBRATE_MODE_DEFAULT && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+      getSystemCallChannel(chatId) != null && getCallVibrateMode() == VIBRATE_MODE_DISABLED) {
+      return VIBRATE_MODE_ENABLED;
+    }
+    return channelMode;
+  }
+
+  public boolean hasCustomCallSettings (long userChatId) {
+    if (userChatId == 0) {
+      return false;
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      if (getSystemCallChannel(userChatId) != null) {
+        return true;
+      }
+    }
+    return getCustomCallRingtone(userChatId) != null ||
+      getCustomCallVibrateModeForChat(userChatId) != VIBRATE_MODE_DEFAULT;
   }
 
   public boolean getCustomCallVibrateOnlyIfSilentForChat (long chatId) {
@@ -1228,6 +1432,98 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
         getChannelCache().create(tdlib.myUser());
       }
     }
+  }
+
+  private boolean findCustomCallSettings (@Nullable Set<Long> chatIds) {
+    String[] prefixes = {key(_CUSTOM_CALL_RINGTONE_KEY), key(_CUSTOM_CALL_VIBRATE_KEY)};
+    for (String prefix : prefixes) {
+      for (LevelDB.Entry entry : Settings.instance().pmc().find(prefix)) {
+        long chatId = StringUtils.parseLong(entry.key().substring(prefix.length()));
+        if (chatId != 0) {
+          if (chatIds == null) {
+            entry.release();
+            return true;
+          }
+          chatIds.add(chatId);
+        }
+      }
+    }
+    return chatIds != null && !chatIds.isEmpty();
+  }
+
+  public int getCustomCallSettingsCount () {
+    Set<Long> chatIds = new HashSet<>();
+    findCustomCallSettings(chatIds);
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      long accountUserId = tdlib.myUserId(true);
+      if (accountUserId != 0) {
+        for (long chatId : TdlibNotificationChannelGroup.findUserCallChatIds(accountUserId,
+          getChannelsGlobalVersion())) {
+          chatIds.add(chatId);
+        }
+      }
+    }
+    return chatIds.size();
+  }
+
+  public boolean hasNonDefaultCallSettings () {
+    // As the rows show them: a short or a long vibration saved before is on
+    return getCallRingtone() != null || getCallVibrateMode() == VIBRATE_MODE_DISABLED ||
+      getCallVibrateOnlyIfSilent() || !Passcode.instance().requireForIncomingCalls() ||
+      findCustomCallSettings(null);
+  }
+
+  public void resetCallSettings () {
+    LevelDB editor = Settings.instance().edit();
+    editor
+      .remove(key(_CALL_RINGTONE_KEY))
+      .remove(key(_CALL_RINGTONE_NAME_KEY))
+      .remove(key(_CALL_RINGTONE_PATH_KEY))
+      .remove(key(_CALL_VIBRATE_KEY))
+      .remove(key(_CALL_VIBRATE_ONLYSILENT_KEY));
+    // The versions of channels of users stay: a channel made again under the id of a deleted one
+    // would get back its settings
+    Settings.instance().removeByAnyPrefix(new String[] {
+      key(_CUSTOM_CALL_RINGTONE_KEY), key(_CUSTOM_CALL_RINGTONE_NAME_KEY),
+      key(_CUSTOM_CALL_RINGTONE_PATH_KEY), key(_CUSTOM_CALL_VIBRATE_KEY),
+      key(_CUSTOM_CALL_VIBRATE_ONLYSILENT_KEY)
+    }, editor);
+    _callRingtone = _callRingtoneName = _callRingtonePath = null;
+    callRingtoneLoaded = callRingtoneNameLoaded = callRingtonePathLoaded = false;
+    _callVibrate = null;
+    _callVibrateOnlyIfSilent = null;
+    Passcode.instance().setRequireForIncomingCalls(true);
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      long oldVersion = getCallChannelVersion(0);
+      long newVersion = oldVersion == Long.MAX_VALUE ? Long.MIN_VALUE : oldVersion + 1;
+      editor.putLong(callChannelVersionKey(0), newVersion);
+      editor.apply();
+      queue.send(RESET_CALL_CHANNELS, new Object[] {this, newVersion});
+    } else {
+      editor.apply();
+    }
+  }
+
+  @NotificationThread
+  @RequiresApi(Build.VERSION_CODES.O)
+  private void resetCallChannelsImpl (long channelVersion) {
+    if (tdlib.account().isLoggingOut()) {
+      return;
+    }
+    try {
+      // Known also before TDLib names it, e.g. for another account just woken by a reset of all
+      TdlibNotificationChannelGroup.resetCallChannels(
+        tdlib,
+        tdlib.myUserId(true),
+        tdlib.account().isDebug(),
+        getChannelsGlobalVersion(),
+        channelVersion
+      );
+    } catch (TdlibNotificationChannelGroup.ChannelCreationFailureException e) {
+      TDLib.Tag.notifications("Unable to reset call channels:\n%s", Log.toString(e));
+      tdlib.settings().trackNotificationChannelProblem(e, 0);
+    }
+    tdlib.listeners().updateNotificationChannel(scopePrivate());
   }
 
   public TdlibNotificationChannelGroup getChannelCache () throws TdlibNotificationChannelGroup.ChannelCreationFailureException {
@@ -1285,6 +1581,9 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
     _channelGlobalVersion = newGlobalVersion;
     Settings.instance().putInt(key(_CHANNEL_VERSION_GLOBAL_KEY, tdlib.id()), newGlobalVersion);
     channelGroupCache = null;
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      TdlibNotificationUtils.removeAccountShortcuts(tdlib, !recreate);
+    }
     if (user != null) {
       boolean isDebug = tdlib.account().isDebug();
       TdlibNotificationChannelGroup.deleteChannels(tdlib, user.id, isDebug, user, recreate);
@@ -1406,6 +1705,242 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
   }
 
   @RequiresApi(Build.VERSION_CODES.O)
+  long nextCustomChannelVersion (long chatId) {
+    long version = getChannelVersion(null, chatId);
+    return version == Long.MAX_VALUE ? Long.MIN_VALUE : version + 1;
+  }
+
+  @NotificationThread
+  void setCustomChannelVersion (long chatId, long version) {
+    Settings.instance().putLong(key(_CHANNEL_VERSION_CUSTOM_KEY + chatId), version);
+  }
+
+  @NotificationThread
+  void keepMadeChannelSettings (long chatId, long version, int settings) {
+    Settings.instance().edit()
+      .putLong(key(KEY_PREFIX_CHANNEL_MADE_VERSION_CUSTOM + chatId), version)
+      .putInt(key(KEY_PREFIX_CHANNEL_MADE_SETTINGS_CUSTOM + chatId), settings)
+      .apply();
+  }
+
+  @NotificationThread
+  void forgetMadeChannelSettings (long chatId) {
+    Settings.instance().edit()
+      .remove(key(KEY_PREFIX_CHANNEL_MADE_VERSION_CUSTOM + chatId))
+      .remove(key(KEY_PREFIX_CHANNEL_MADE_SETTINGS_CUSTOM + chatId))
+      .apply();
+  }
+
+  @RequiresApi(Build.VERSION_CODES.O)
+  int findMadeChannelSettings (long chatId) {
+    String versionKey = key(KEY_PREFIX_CHANNEL_MADE_VERSION_CUSTOM + chatId);
+    if (!Settings.instance().containsKey(versionKey) ||
+      Settings.instance().getLong(versionKey, 0) != getChannelVersion(null, chatId)) {
+      return -1;
+    }
+    return Settings.instance().getInt(key(KEY_PREFIX_CHANNEL_MADE_SETTINGS_CUSTOM + chatId), -1);
+  }
+
+  @RequiresApi(Build.VERSION_CODES.R)
+  public List<android.app.NotificationChannel> findConversationChannels (
+    @Nullable TdApi.NotificationSettingsScope scope,
+    long customChatId,
+    boolean isNewCustomChannel
+  ) {
+    String conversationId = null;
+    if (isNewCustomChannel) {
+      conversationId = TdlibNotificationUtils.findChatShortcutId(tdlib, customChatId);
+      if (conversationId == null) {
+        return new ArrayList<>();
+      }
+    }
+    TdApi.NotificationSettingsScope channelScope =
+      isNewCustomChannel ? scope(customChatId) : scope;
+    long channelChatId = isNewCustomChannel ? 0 : customChatId;
+    String channelId = TdlibNotificationChannelGroup.makeChannelId(
+      tdlib.myUserId(true),
+      getChannelsGlobalVersion(),
+      channelScope,
+      channelChatId,
+      getChannelVersion(channelScope, channelChatId)
+    );
+    return TdlibNotificationChannelGroup.findConversationChannels(channelId, conversationId);
+  }
+
+  public boolean needsCustomChannel (long chatId) {
+    return getEffectivePriorityOrImportance(chatId) >= NotificationManager.IMPORTANCE_DEFAULT;
+  }
+
+  @RequiresApi(Build.VERSION_CODES.O)
+  public long getCallChannelVersion (long userChatId) {
+    return Settings.instance().getLong(callChannelVersionKey(userChatId), 0);
+  }
+
+  private String callChannelVersionKey (long userChatId) {
+    return userChatId != 0 ?
+      key(KEY_PREFIX_CHANNEL_VERSION_CALLS_CUSTOM + userChatId) :
+      key(KEY_CHANNEL_VERSION_CALLS);
+  }
+
+  @NotificationThread
+  @RequiresApi(Build.VERSION_CODES.O)
+  long incrementCallChannelVersion (long userChatId) {
+    // In an edit, which waits for one of the app that raises the same version
+    LevelDB editor = Settings.instance().edit();
+    long oldVersion = getCallChannelVersion(userChatId);
+    long newVersion = oldVersion == Long.MAX_VALUE ? Long.MIN_VALUE : oldVersion + 1;
+    editor.putLong(callChannelVersionKey(userChatId), newVersion);
+    editor.apply();
+    return newVersion;
+  }
+
+  @RequiresApi(Build.VERSION_CODES.O)
+  private void incrementCallChannelVersion (
+    long userChatId,
+    boolean isRingtoneChanged,
+    LevelDB editor
+  ) {
+    long oldVersion = getCallChannelVersion(userChatId);
+    long newVersion = oldVersion == Long.MAX_VALUE ? Long.MIN_VALUE : oldVersion + 1;
+    editor.putLong(callChannelVersionKey(userChatId), newVersion);
+    editor.apply();
+    queue.send(
+      UPDATE_CALL_CHANNEL_SETTINGS,
+      new Object[] {this, userChatId, newVersion, isRingtoneChanged}
+    );
+  }
+
+  @NotificationThread
+  @RequiresApi(Build.VERSION_CODES.O)
+  private void updateCallChannelSettingsImpl (
+    long userChatId,
+    long channelVersion,
+    boolean isRingtoneChanged
+  ) {
+    if (tdlib.account().isLoggingOut()) {
+      return;
+    }
+    long[] followingChatIds = null;
+    try {
+      followingChatIds = TdlibNotificationChannelGroup.updateCallChannelSettings(
+        tdlib,
+        tdlib.myUserId(),
+        tdlib.account().isDebug(),
+        getChannelsGlobalVersion(),
+        userChatId,
+        channelVersion,
+        isRingtoneChanged
+      );
+    } catch (TdlibNotificationChannelGroup.ChannelCreationFailureException e) {
+      TDLib.Tag.notifications(
+        "Unable to increment call channel version for chat %d:\n%s",
+        userChatId,
+        Log.toString(e)
+      );
+      tdlib.settings().trackNotificationChannelProblem(e, userChatId);
+    }
+    if (followingChatIds != null) {
+      for (long chatId : followingChatIds) {
+        tdlib.listeners().updateNotificationChannel(chatId);
+      }
+    }
+    if (userChatId != 0) {
+      tdlib.listeners().updateNotificationChannel(userChatId);
+    } else {
+      tdlib.listeners().updateNotificationChannel(scopePrivate());
+    }
+  }
+
+  @AnyThread
+  @RequiresApi(Build.VERSION_CODES.O)
+  public @Nullable String ensureCallChannel (long userChatId) {
+    long accountUserId = tdlib.myUserId(true);
+    if (accountUserId == 0 || tdlib.account().isLoggingOut()) {
+      return null;
+    }
+    long channelChatId = hasCustomCallSettings(userChatId) ? userChatId : 0;
+    try {
+      return TdlibNotificationChannelGroup.ensureCallChannel(
+        tdlib,
+        accountUserId,
+        tdlib.account().isDebug(),
+        getChannelsGlobalVersion(),
+        channelChatId,
+        getCallChannelVersion(channelChatId)
+      );
+    } catch (TdlibNotificationChannelGroup.ChannelCreationFailureException e) {
+      TDLib.Tag.notifications(
+        "Unable to create call channel for chat %d:\n%s",
+        channelChatId,
+        Log.toString(e)
+      );
+      tdlib.settings().trackNotificationChannelProblem(e, channelChatId);
+      return null;
+    }
+  }
+
+  public boolean canCallChannelRing (long userChatId) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      Object channel = getSystemCallChannel(userChatId);
+      if (channel != null) {
+        int importance = ((android.app.NotificationChannel) channel).getImportance();
+        return TdlibNotificationChannelGroup.canRing(importance);
+      }
+    }
+    return true;
+  }
+
+  @RequiresApi(Build.VERSION_CODES.O)
+  public boolean canShowOnCallChannel (String channelId) {
+    if (!canPostCallNotifications()) {
+      return false;
+    }
+    NotificationManager m =
+      (NotificationManager) AppContext.get().getSystemService(Context.NOTIFICATION_SERVICE);
+    android.app.NotificationChannel channel =
+      m != null ? m.getNotificationChannel(channelId) : null;
+    return channel != null && channel.getImportance() != NotificationManager.IMPORTANCE_NONE;
+  }
+
+  @AnyThread
+  public void deleteStaleChannels () {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      sendLocked(null, DELETE_STALE_CHANNELS, this);
+    }
+  }
+
+  @RequiresApi(Build.VERSION_CODES.O)
+  public String getSystemCallChannelId (long userChatId) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      long accountId = tdlib.myUserId();
+      if (accountId != 0) {
+        long version = getCallChannelVersion(userChatId);
+        int globalVersion = getChannelsGlobalVersion();
+        return TdlibNotificationChannelGroup.makeCallChannelId(
+          accountId,
+          globalVersion,
+          userChatId,
+          version
+        );
+      }
+    }
+    return null;
+  }
+
+  @RequiresApi(Build.VERSION_CODES.O)
+  public Object getSystemCallChannel (long userChatId) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      NotificationManager m =
+        (NotificationManager) AppContext.get().getSystemService(Context.NOTIFICATION_SERVICE);
+      String channelId = getSystemCallChannelId(userChatId);
+      if (m != null && channelId != null) {
+        return m.getNotificationChannel(channelId);
+      }
+    }
+    return null;
+  }
+
+  @RequiresApi(Build.VERSION_CODES.O)
   public String getSystemChannelId (TdApi.NotificationSettingsScope scope, long customChatId) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       long accountId = tdlib.myUserId();
@@ -1466,7 +2001,19 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
 
   private @Nullable String getChannelSound (TdApi.NotificationSettingsScope scope, long customChatId, @Nullable String defaultSound) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      android.app.NotificationChannel channel = (android.app.NotificationChannel) getSystemChannel(scope, customChatId);
+      Object channel = getSystemChannel(scope, customChatId);
+      return getChannelSound(channel, defaultSound, RingtoneManager.TYPE_NOTIFICATION);
+    }
+    return defaultSound;
+  }
+
+  private @Nullable String getChannelSound (
+    @Nullable Object channelObj,
+    @Nullable String defaultSound,
+    int ringtoneType
+  ) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      android.app.NotificationChannel channel = (android.app.NotificationChannel) channelObj;
       if (channel != null) {
         Uri sound = channel.getSound();
         android.media.AudioAttributes audioAttributes = channel.getAudioAttributes();
@@ -1476,13 +2023,18 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
           return "";
         } else {
           String soundString = sound.toString();
+          if (ringtoneType == RingtoneManager.TYPE_RINGTONE) {
+            // The default of calls is Telegram Call, also its copy; the system's is a choice
+            return TelegramCallRingtone.isTelegramCall(sound) ? null : soundString;
+          }
           try {
             Uri defaultRingtoneUri;
-            defaultRingtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+            defaultRingtoneUri = RingtoneManager.getDefaultUri(ringtoneType);
             if (defaultRingtoneUri != null && StringUtils.equalsOrBothEmpty(defaultRingtoneUri.toString(), soundString)) {
               return null;
             }
-            defaultRingtoneUri = RingtoneManager.getActualDefaultRingtoneUri(AppContext.get(), RingtoneManager.TYPE_NOTIFICATION);
+            defaultRingtoneUri =
+              RingtoneManager.getActualDefaultRingtoneUri(AppContext.get(), ringtoneType);
             if (defaultRingtoneUri != null && StringUtils.equalsOrBothEmpty(defaultRingtoneUri.toString(), soundString)) {
               return null;
             }
@@ -1536,6 +2088,41 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
     return defaultVibrateMode;
   }
 
+  private @Nullable String getCallChannelSound (long userChatId, @Nullable String defaultSound) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      Object channel = getSystemCallChannel(userChatId);
+      // Silent picked on its page in the system keeps the attributes of a ringtone
+      if (channel != null && ((android.app.NotificationChannel) channel).getSound() == null) {
+        return "";
+      }
+      String sound = getChannelSound(channel, defaultSound, RingtoneManager.TYPE_RINGTONE);
+      // Telegram Call of a user's own: saved, or picked on the page of its channel while the
+      // account rings another one
+      Uri channelSound = channel != null ?
+        ((android.app.NotificationChannel) channel).getSound() : null;
+      if (sound == null && userChatId != 0 && TelegramCallRingtone.isTelegramCall(channelSound) &&
+        (getCallRingtone() != null || getSavedCustomCallRingtone(userChatId) != null)) {
+        return getTelegramCallRingtone().toString();
+      }
+      return sound;
+    }
+    return defaultSound;
+  }
+
+  private int getCallChannelVibrateMode (long userChatId, int defaultVibrateMode) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      Object channelObj = getSystemCallChannel(userChatId);
+      if (channelObj != null) {
+        android.app.NotificationChannel channel = (android.app.NotificationChannel) channelObj;
+        return TdlibNotificationChannelGroup.getCallVibrateMode(
+          channel.shouldVibrate(),
+          channel.getVibrationPattern()
+        );
+      }
+    }
+    return defaultVibrateMode;
+  }
+
   // Utils
 
   private static boolean needUpdateDefaults (TdApi.ScopeNotificationSettings settings) {
@@ -1560,11 +2147,21 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
   // Ringtone
 
   public @Nullable String getCustomCallRingtone (long chatId) {
+    return getCallChannelSound(chatId, getSavedCustomCallRingtone(chatId));
+  }
+
+  public @Nullable String getSavedCustomCallRingtone (long chatId) {
     return Settings.instance().getString(key(_CUSTOM_CALL_RINGTONE_KEY + chatId), null);
   }
 
   public @Nullable String getCustomCallRingtoneName (long chatId) {
-    return Settings.instance().getString(key(_CUSTOM_CALL_RINGTONE_NAME_KEY + chatId), null);
+    String actualSound = getCustomCallRingtone(chatId);
+    if (StringUtils.isEmpty(actualSound)) {
+      return actualSound;
+    }
+    String sound = getSavedCustomCallRingtone(chatId);
+    String nameKey = key(_CUSTOM_CALL_RINGTONE_NAME_KEY + chatId);
+    return getChannelSoundName(sound, Settings.instance().getString(nameKey, null), actualSound);
   }
 
   public @Nullable String getCustomCallRingtonePath (long chatId) {
@@ -1572,14 +2169,13 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
   }
 
   public void setCustomCallRingtone (long chatId, @Nullable String customRingtone, @Nullable String customRingtoneName, @Nullable String customRingtonePath) {
+    String oldRingtone = getCustomCallRingtone(chatId);
+    LevelDB editor = Settings.instance().edit();
     if (customRingtone == null) {
-      Settings.instance().edit()
-        .remove(key(_CUSTOM_CALL_RINGTONE_KEY + chatId))
-        .remove(key(_CUSTOM_CALL_RINGTONE_NAME_KEY + chatId))
-        .remove(key(_CUSTOM_CALL_RINGTONE_PATH_KEY + chatId))
-        .apply();
+      editor.remove(key(_CUSTOM_CALL_RINGTONE_KEY + chatId));
+      editor.remove(key(_CUSTOM_CALL_RINGTONE_NAME_KEY + chatId));
+      editor.remove(key(_CUSTOM_CALL_RINGTONE_PATH_KEY + chatId));
     } else {
-      LevelDB.Editor editor = Settings.instance().edit();
       editor.putString(key(_CUSTOM_CALL_RINGTONE_KEY + chatId), customRingtone);
       if (StringUtils.isEmpty(customRingtoneName)) {
         editor.remove(key(_CUSTOM_CALL_RINGTONE_NAME_KEY + chatId));
@@ -1591,19 +2187,57 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
       } else {
         editor.putString(key(_CUSTOM_CALL_RINGTONE_PATH_KEY + chatId), customRingtonePath);
       }
+    }
+    boolean isChanged = !compareSounds(customRingtone, oldRingtone);
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isChanged) {
+      incrementCallChannelVersion(chatId, true, editor);
+    } else {
       editor.apply();
     }
   }
 
-  public String getCallRingtone (long chatId) {
+  public @NonNull String getCallRingtone (long chatId) {
     String sound = getCustomCallRingtone(chatId);
     if (sound == null) {
       sound = getCallRingtone();
     }
-    if (StringUtils.isEmpty(sound)) {
-      sound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE).toString();
+    return sound != null ? sound : getTelegramCallRingtone().toString();
+  }
+
+  public static Uri getTelegramCallRingtone () {
+    // By the name of the resource, not its id, which a build may change: a channel keeps its sound
+    Resources resources = AppContext.get().getResources();
+    return new Uri.Builder()
+      .scheme(ContentResolver.SCHEME_ANDROID_RESOURCE)
+      .authority(AppContext.get().getPackageName())
+      .appendPath(resources.getResourceTypeName(R.raw.telegram_call))
+      .appendPath(resources.getResourceEntryName(R.raw.telegram_call))
+      .build();
+  }
+
+  public static long[] getFallbackVibrationPattern () {
+    // What the system vibrates for a sound without vibration while the ringer is on vibrate
+    return getSystemVibrationPattern("config_notificationFallbackVibePattern");
+  }
+
+  public static long[] getDefaultVibrationPattern () {
+    // What the system vibrates for a channel that vibrates without a pattern of its own
+    return getSystemVibrationPattern("config_defaultNotificationVibePattern");
+  }
+
+  @SuppressWarnings("DiscouragedApi")
+  private static long[] getSystemVibrationPattern (String name) {
+    Resources resources = Resources.getSystem();
+    int id = resources.getIdentifier(name, "array", "android");
+    int[] pattern = id != 0 ? resources.getIntArray(id) : null;
+    if (pattern == null || pattern.length == 0) {
+      return VIBRATE_FALLBACK_PATTERN;
     }
-    return sound;
+    long[] result = new long[pattern.length];
+    for (int i = 0; i < pattern.length; i++) {
+      result[i] = pattern[i];
+    }
+    return result;
   }
 
   public boolean shouldVibrateBecauseOfMute () {
@@ -1617,15 +2251,15 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
     return true;
   }
 
-  public boolean isRingerSilent () {
+  public int getRingerMode () {
     if (audioManager() != null) {
       try {
-        return audioManager().getRingerMode() == AudioManager.RINGER_MODE_SILENT;
+        return audioManager().getRingerMode();
       } catch (Throwable t) {
         Log.w(t);
       }
     }
-    return false;
+    return AudioManager.RINGER_MODE_NORMAL;
   }
 
   public int getCallVibrateMode (long chatId) {
@@ -1653,7 +2287,24 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
     return vibrateMode;
   }
 
+  public @Nullable long[] getCallVibratePattern (long chatId) {
+    switch (getCallVibrateMode(chatId)) {
+      case VIBRATE_MODE_DISABLED:
+        return null;
+      case VIBRATE_MODE_SHORT:
+      case VIBRATE_MODE_LONG:
+      case VIBRATE_MODE_ENABLED:
+        return VIBRATE_CALL_LONG_PATTERN;
+      default:
+        return needVibrateWhenRinging() ? VIBRATE_CALL_LONG_PATTERN : null;
+    }
+  }
+
   public @Nullable String getCallRingtone () {
+    return getCallChannelSound(0, getSavedCallRingtone());
+  }
+
+  public @Nullable String getSavedCallRingtone () {
     if (!callRingtoneLoaded) {
       _callRingtone = Settings.instance().getString(key(_CALL_RINGTONE_KEY, tdlib.id()), null);
       callRingtoneLoaded = true;
@@ -1662,6 +2313,11 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
   }
 
   public @Nullable String getCallRingtoneName () {
+    String sound = getSavedCallRingtone();
+    return getChannelSoundName(sound, getSavedCallRingtoneName(), getCallRingtone());
+  }
+
+  private @Nullable String getSavedCallRingtoneName () {
     if (!callRingtoneNameLoaded) {
       _callRingtoneName = Settings.instance().getString(key(_CALL_RINGTONE_NAME_KEY, tdlib.id()), null);
       callRingtoneNameLoaded = true;
@@ -1678,13 +2334,13 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
   }
 
   public boolean setCallRingtone (@Nullable String voiceRingtone, @Nullable String voiceRingtoneName, @Nullable String voiceRingtonePath) {
-    if (!StringUtils.equalsOrBothEmpty(voiceRingtone, getCallRingtone()) ||
-        !StringUtils.equalsOrBothEmpty(voiceRingtoneName, getCallRingtoneName()) ||
+    if (!compareSounds(voiceRingtone, getCallRingtone()) ||
+        !StringUtils.equalsOrBothEmpty(voiceRingtoneName, getSavedCallRingtoneName()) ||
         !StringUtils.equalsOrBothEmpty(voiceRingtonePath, getCallRingtonePath())) {
       this._callRingtone = voiceRingtone; this.callRingtoneLoaded = true;
       this._callRingtoneName = voiceRingtoneName; this.callRingtoneNameLoaded = true;
       this._callRingtonePath = voiceRingtonePath; this.callRingtonePathLoaded = true;
-      SharedPreferences.Editor editor = Settings.instance().edit();
+      LevelDB editor = Settings.instance().edit();
       if (voiceRingtone == null) {
         editor.remove(key(_CALL_RINGTONE_KEY));
         editor.remove(key(_CALL_RINGTONE_NAME_KEY));
@@ -1702,13 +2358,28 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
           editor.putString(key(_CALL_RINGTONE_PATH_KEY), voiceRingtonePath);
         }
       }
-      editor.apply();
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        incrementCallChannelVersion(0, true, editor);
+      } else {
+        editor.apply();
+      }
       return true;
     }
     return false;
   }
 
+  public static boolean isSameCallSound (@Nullable Uri a, @Nullable Uri b) {
+    // Pickers may add the title of a ringtone to its query, and Telegram Call has its copies
+    return ObjectUtils.equals(a, b) || a != null && b != null &&
+      (a.buildUpon().clearQuery().build().equals(b.buildUpon().clearQuery().build()) ||
+        TelegramCallRingtone.isTelegramCall(a) && TelegramCallRingtone.isTelegramCall(b));
+  }
+
   public int getCallVibrateMode () {
+    return getCallChannelVibrateMode(0, getSavedCallVibrateMode());
+  }
+
+  public int getSavedCallVibrateMode () {
     if (_callVibrate == null)
       _callVibrate = Settings.instance().getInt(key(_CALL_VIBRATE_KEY, tdlib.id()), VIBRATE_MODE_DEFAULT);
     return _callVibrate;
@@ -1724,10 +2395,34 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
     if (getCallVibrateMode() != vibrateMode || getCallVibrateOnlyIfSilent() != onlySilent) {
       this._callVibrate = vibrateMode;
       this._callVibrateOnlyIfSilent = onlySilent;
-      Settings.instance().edit().putInt(key(_CALL_VIBRATE_KEY), vibrateMode).putBoolean(key(_CALL_VIBRATE_ONLYSILENT_KEY), onlySilent).apply();
+      LevelDB editor = Settings.instance().edit();
+      editor.putInt(key(_CALL_VIBRATE_KEY), vibrateMode);
+      editor.putBoolean(key(_CALL_VIBRATE_ONLYSILENT_KEY), onlySilent);
+      if (!onlySilent) {
+        inheritCustomCallVibrations(vibrateMode != VIBRATE_MODE_DISABLED, editor);
+      }
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        incrementCallChannelVersion(0, false, editor);
+      } else {
+        editor.apply();
+      }
       return true;
     }
     return false;
+  }
+
+  private void inheritCustomCallVibrations (boolean isOn, LevelDB editor) {
+    // A user's vibration that the account now has is Default again; its channel already vibrates
+    // so and stays
+    String prefix = key(_CUSTOM_CALL_VIBRATE_KEY);
+    for (LevelDB.Entry entry : Settings.instance().pmc().find(prefix)) {
+      long chatId = StringUtils.parseLong(entry.key().substring(prefix.length()));
+      if (chatId != 0 && (entry.asInt() != VIBRATE_MODE_DISABLED) == isOn &&
+        !getCustomCallVibrateOnlyIfSilentForChat(chatId)) {
+        editor.remove(key(_CUSTOM_CALL_VIBRATE_KEY + chatId));
+        editor.remove(key(_CUSTOM_CALL_VIBRATE_ONLYSILENT_KEY + chatId));
+      }
+    }
   }
 
   // Reset
@@ -1744,7 +2439,8 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
       .remove(key(_CALL_RINGTONE_NAME_KEY, accountId))
       .remove(key(_CALL_RINGTONE_PATH_KEY, accountId))
       .remove(key(_CALL_VIBRATE_KEY, accountId))
-      .remove(key(_CALL_VIBRATE_ONLYSILENT_KEY, accountId));
+      .remove(key(_CALL_VIBRATE_ONLYSILENT_KEY, accountId))
+      .remove(key(KEY_CHANNEL_VERSION_CALLS, accountId));
 
     String customSoundKey = key(_CUSTOM_SOUND_KEY, accountId);
     String customSoundNameKey = key(_CUSTOM_SOUND_NAME_KEY, accountId);
@@ -1758,10 +2454,14 @@ public class TdlibNotificationManager implements UI.StateListener, Passcode.Lock
     String customCallVibrateOnlySilentKey = key(_CUSTOM_CALL_VIBRATE_ONLYSILENT_KEY, accountId);
     String customCallPriorityKey = key(_CUSTOM_PRIORITY_OR_IMPORTANCE_KEY, accountId);
     String channelVersionCustomKey = key(_CHANNEL_VERSION_CUSTOM_KEY, accountId);
+    String callChannelVersionCustomKey = key(KEY_PREFIX_CHANNEL_VERSION_CALLS_CUSTOM, accountId);
+    String channelMadeVersionCustomKey = key(KEY_PREFIX_CHANNEL_MADE_VERSION_CUSTOM, accountId);
+    String channelMadeSettingsCustomKey = key(KEY_PREFIX_CHANNEL_MADE_SETTINGS_CUSTOM, accountId);
     Settings.instance().removeByAnyPrefix(new String[] {
       customSoundKey, customSoundNameKey, customSoundPathKey, customLedKey, customVibrateKey, customVibrateOnlySilentKey,
       customCallRingtoneKey, customCallRingtoneNameKey, customCallVibrateKey, customCallVibrateOnlySilentKey, customCallPriorityKey,
-      channelVersionCustomKey
+      channelVersionCustomKey, callChannelVersionCustomKey,
+      channelMadeVersionCustomKey, channelMadeSettingsCustomKey
     }, editor);
 
     editor.apply();

@@ -4167,7 +4167,7 @@ public class ProfileController extends ViewController<ProfileController.Args> im
 
     if (hasForumChanges) {
       boolean isForum = toggleForumItem.isSelected();
-      changes.add(new TdApi.ToggleSupergroupIsForum(ChatId.toSupergroupId(chat.id), isForum, false));
+      changes.add(new TdApi.ToggleSupergroupIsForum(ChatId.toSupergroupId(chat.id), isForum, false, false));
     }
 
     if (hasSignMessagesChanges || hasShowAuthorsChanges) {

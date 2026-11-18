@@ -48,7 +48,7 @@ import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibFilesManager;
 import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
-import org.thunderdog.challegram.tool.Drawables;
+import org.thunderdog.challegram.tool.Icons;
 import org.thunderdog.challegram.tool.Paints;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.Strings;
@@ -156,6 +156,14 @@ public class TGMessageVideo extends TGMessage implements FileProgressComponent.S
         tdlib.context().player().removeTrackListener(tdlib, getMessage(), this);
       }
     }
+  }
+
+  @Override
+  protected boolean isSupportedMessageContent (
+    TdApi.Message message,
+    TdApi.MessageContent content
+  ) {
+    return content.getConstructor() == TdApi.MessageVideoNote.CONSTRUCTOR;
   }
 
   @Override
@@ -597,7 +605,15 @@ public class TGMessageVideo extends TGMessage implements FileProgressComponent.S
       Paint paint = Paints.whitePorterDuffPaint();
       paint.setAlpha((int) (255f * alpha));
       Drawable drawable = view.getSparseDrawable(R.drawable.deproko_baseline_sound_muted_24, 0);
-      Drawables.draw(c, drawable, centerX - drawable.getMinimumWidth() / 2f, centerY - drawable.getMinimumHeight() / 2f, paint);
+      Icons.drawBitmapOrVector(
+        c,
+        R.drawable.deproko_baseline_sound_muted_24,
+        drawable,
+        needScale,
+        centerX - drawable.getMinimumWidth() / 2f,
+        centerY - drawable.getMinimumHeight() / 2f,
+        paint
+      );
       paint.setAlpha(255);
       if (needScale) {
         Views.restore(c, restoreToCount);

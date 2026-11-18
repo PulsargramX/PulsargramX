@@ -368,7 +368,7 @@ def worker(project, cache, edition):
       raise BuildError("TDLib files do not match committed LFS hashes: " + ", ".join(invalid))
   os.environ["TGX_GRADLE_PROJECT_DIR"] = str(project)
   common = ["--no-parallel", "--max-workers=1", "--stacktrace",
-            "-Pkotlin.compiler.execution.strategy=in-process", "-Ptgx.nativeJobs=2",
+            "-Pkotlin.compiler.execution.strategy=in-process", "-Ptgx.nativeJobs=14",
             "-Pclient.edition=" + edition, "-Pabi=arm64"]
   logs = cache / "logs"
   logs.mkdir(exist_ok=True)

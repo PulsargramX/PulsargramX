@@ -194,9 +194,9 @@ public class ChatListPreviewTest {
     Drawable(int id) {this.id = id;}
     int getMinimumHeight() {return 16;}
   }
-  static class Drawables {
+  static class Icons {
     static ArrayList<Integer> xs = new ArrayList<>();
-    static void drawRtl(Canvas canvas, Drawable drawable, int x, int y, int paint, int width, boolean rtl) {xs.add(x);}
+    static void drawBitmapRtl(Canvas canvas, int iconId, int x, int y, int paint, int width, boolean rtl) {xs.add(x);}
   }
   static class DrawableProvider {Drawable getSparseDrawable(int id, int color) {return new Drawable(id);}}
   static class ComplexReceiver {
@@ -353,7 +353,7 @@ public class ChatListPreviewTest {
     check(text.margin.width(0, 0, 200, 18) == 38 && text.margin.width(1, 18, 200, 18) == 0, "Icons reserve only first line width");
     ChatListPreview.draw(new Canvas(), 0, 72, 40, 320, false, 1f, prefix, text, icons, 1, new ComplexReceiver(), new DrawableProvider());
     check(text.x == 72 + prefix.getWidth() && text.y == 40, "Compact preview follows sender on same line");
-    check(Drawables.xs.get(1) - Drawables.xs.get(0) == 18, "Attachment icons use chat list spacing");
+    check(Icons.xs.get(1) - Icons.xs.get(0) == 18, "Attachment icons use chat list spacing");
     ChatListPreview.draw(new Canvas(), 1, 72, 32, 320, false, 1f, prefix, text, icons, 1, new ComplexReceiver(), new DrawableProvider());
     check(text.x == 72 && text.y == 50, "Three line preview follows sender on next line");
     text = ChatListPreview.buildText(caption.text, entities, 200, 1, false, icons, new ViewProvider(), null);

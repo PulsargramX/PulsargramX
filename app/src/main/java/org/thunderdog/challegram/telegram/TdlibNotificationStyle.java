@@ -27,6 +27,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.util.SparseIntArray;
 
+import androidx.annotation.DrawableRes;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
@@ -436,6 +437,24 @@ public class TdlibNotificationStyle implements TdlibNotificationStyleDelegate, F
       }
     }
 
+    NotificationCompat.Action callBackAction = null;
+    long callBackUserId = hasShownCall(helper, group) ? tdlib.chatUserId(chat) : 0;
+    if (callBackUserId != 0) {
+      PendingIntent pendingIntent = PendingIntent.getActivity(
+        AppContext.get(),
+        Intents.REQUEST_CODE_CALL_BACK,
+        Intents.valueOfCallBack(tdlib.id(), callBackUserId),
+        PendingIntent.FLAG_UPDATE_CURRENT | Intents.mutabilityFlags(false)
+      );
+      callBackAction = new NotificationCompat.Action.Builder(
+        R.drawable.baseline_phone_24_white,
+        Lang.getString(R.string.CallBack),
+        pendingIntent
+      )
+        .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_CALL)
+        .build();
+    }
+
     Intent hideIntent = new Intent(AppContext.get(), TGRemoveReceiver.class);
     Intents.secureIntent(hideIntent, true);
     TdlibNotificationExtras.put(hideIntent, tdlib, group, needReplyToMessage, allMessageIds, allUserIds);
@@ -619,7 +638,7 @@ public class TdlibNotificationStyle implements TdlibNotificationStyleDelegate, F
 
     builder
       .setContentTitle(visualChatTitle)
-      .setSmallIcon(R.mipmap.app_notification)
+      .setSmallIcon(smallIcon(helper, group))
       .setContentText(textContent)
       .setTicker(tickerText)
       .setAutoCancel(Config.NOTIFICATION_AUTO_CANCEL)
@@ -647,6 +666,9 @@ public class TdlibNotificationStyle implements TdlibNotificationStyleDelegate, F
       builder.setSubText(Lang.getNotificationCategory(category));
     }
 
+    if (callBackAction != null) {
+      builder.addAction(callBackAction);
+    }
     if (!Passcode.instance().isLocked()) {
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
         if (muteAction != null)
@@ -683,7 +705,15 @@ public class TdlibNotificationStyle implements TdlibNotificationStyleDelegate, F
     }
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-      rShortcutId = createShortcut(builder, context, group, visualChatTitle, chatId, bitmap);
+      rShortcutId = createShortcut(
+        builder,
+        context,
+        group,
+        visualChatTitle,
+        chatId,
+        channelId,
+        bitmap
+      );
     }
 
     int state;
@@ -733,7 +763,9 @@ public class TdlibNotificationStyle implements TdlibNotificationStyleDelegate, F
     // FIXME 7.0-7.1 android.os.FileUriExposedException:
     // Cleanup
 
-    if (rShortcutId != null) {
+    // A shortcut removed before the system cached it takes its conversation's channels with it
+    if (rShortcutId != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+      TdlibNotificationUtils.isCachedShortcut(context, rShortcutId)) {
       ShortcutManagerCompat.removeDynamicShortcuts(context, Collections.singletonList(rShortcutId));
     }
 
@@ -749,27 +781,35 @@ public class TdlibNotificationStyle implements TdlibNotificationStyleDelegate, F
   // Common notification
 
   @RequiresApi(api = Build.VERSION_CODES.R)
-  protected final String createShortcut (NotificationCompat.Builder builder, Context context, @NonNull TdlibNotificationGroup group, CharSequence visualChatTitle, long chatId, Bitmap icon) {
+  protected final String createShortcut (
+    NotificationCompat.Builder builder,
+    Context context,
+    @NonNull TdlibNotificationGroup group,
+    CharSequence visualChatTitle,
+    long chatId,
+    @Nullable String channelId,
+    Bitmap icon
+  ) {
     long localChatId = tdlib.settings().getLocalChatId(chatId);
-    String localKey = "tgx_ns_" + tdlib.id() + "_" + localChatId;
-    IconCompat chatIcon = U.isValidBitmap(icon) ? IconCompat.createWithBitmap(icon) : null;
-
-    Person groupPerson = new Person.Builder()
-      .setName(visualChatTitle)
-      .setIcon(chatIcon)
-      .setKey(localKey)
-      .build();
-
-    ShortcutInfoCompat shortcut = new ShortcutInfoCompat.Builder(context, localKey)
-      .setPerson(groupPerson)
-      .setIsConversation()
-      .setLongLived(true)
-      .setShortLabel(visualChatTitle)
-      .setIntent(TdlibNotificationUtils.newCoreIntent(tdlib.id(), localChatId, group.findTargetMessageId()))
-      .setIcon(chatIcon)
-      .build();
-
-    ShortcutManagerCompat.pushDynamicShortcut(context, shortcut);
+    String localKey = TdlibNotificationUtils.findShortcutId(tdlib.id(), localChatId, channelId);
+    if (!TdlibNotificationUtils.canPost(context, channelId, localKey) ||
+      !TdlibNotificationUtils.hasPlaceForShortcut(context, localKey, 0)) {
+      // Without a push the id still leads the post to its conversation's own channel
+      builder.setShortcutId(localKey);
+      return null;
+    }
+    ShortcutInfoCompat shortcut = TdlibNotificationUtils.newChatShortcut(
+      context,
+      tdlib.id(),
+      localKey,
+      visualChatTitle,
+      localChatId,
+      group.findTargetMessageId(),
+      icon
+    );
+    if (!TdlibNotificationUtils.pushShortcut(context, shortcut)) {
+      return null;
+    }
     builder.setShortcutInfo(shortcut);
 
     // TODO: Uncomment to support bubbles. Not usable at the moment.
@@ -1058,6 +1098,28 @@ public class TdlibNotificationStyle implements TdlibNotificationStyleDelegate, F
     return style;
   }
 
+  private static boolean isShownCall (@NonNull TdlibNotificationHelper helper,
+    TdlibNotification notification) {
+    return notification.isCall() && helper.needPreview(notification.group());
+  }
+
+  private static boolean hasShownCall (@NonNull TdlibNotificationHelper helper,
+    Iterable<TdlibNotification> notifications) {
+    for (TdlibNotification notification : notifications) {
+      if (isShownCall(helper, notification)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static @DrawableRes int smallIcon (@NonNull TdlibNotificationHelper helper,
+    Iterable<TdlibNotification> notifications) {
+    return hasShownCall(helper, notifications) ?
+      R.drawable.baseline_call_missed_24_white :
+      R.mipmap.app_notification;
+  }
+
   private NotificationCompat.Builder buildCommonNotification (Context context, @NonNull TdlibNotificationHelper helper, int badgeCount, boolean allowPreview, @Nullable TdlibNotificationSettings settings, final List<TdlibNotification> notifications, final int category, boolean isRebuild) {
     TdlibNotification lastNotification = notifications.get(notifications.size() - 1);
     long singleChatId = helper.findSingleChatId();
@@ -1098,7 +1160,7 @@ public class TdlibNotificationStyle implements TdlibNotificationStyleDelegate, F
     }
 
     b.setAutoCancel(Config.NOTIFICATION_AUTO_CANCEL_SPECIFIC);
-    b.setSmallIcon(R.mipmap.app_notification);
+    b.setSmallIcon(allowPreview ? smallIcon(helper, notifications) : R.mipmap.app_notification);
     b.setWhen(timeMs);
     if (!Device.FLYME) {
       b.setNumber(badgeCount);

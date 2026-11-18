@@ -149,6 +149,7 @@ public class HistoryPaginationTest {
     void setShowUnreadBadge(boolean show) {}
     void mergeWith(TGMessage other, boolean end) {}
     void prepareLayout() {}
+    void restoreSwitchedBlocks(int[] blocks) {}
     void highlight(boolean animate) {}
   }
   static class Adapter {
@@ -164,6 +165,9 @@ public class HistoryPaginationTest {
   static class MessagesLoader {
     static final int SPECIAL_MODE_RESTRICTED = HistoryPaginationTest.SPECIAL_MODE_RESTRICTED;
     static final int SPECIAL_MODE_SEARCH = HistoryPaginationTest.SPECIAL_MODE_SEARCH;
+  }
+  static class Settings {
+    static class MessageState {int[] blocks;}
   }
   static class MessagesManager {
     static final int HIGHLIGHT_MODE_NONE = 0, HIGHLIGHT_MODE_NORMAL = 1, HIGHLIGHT_MODE_UNREAD = 2;
@@ -191,6 +195,9 @@ public class HistoryPaginationTest {
     void revokeReturnMessages() {}
     void scrollToBottom(boolean animated) {}
     void scrollToPositionWithOffsetImpl(int position, int offset) {}
+    void scrollToPositionImpl(int position) {}
+    Settings.MessageState[] findKeptStates() {return null;}
+    Settings.MessageState findKeptState(TGMessage message, Settings.MessageState[] states) {return null;}
     void loadFromStart() {throw new AssertionError("Unexpected jump to latest history");}
     int calculateOffsetInPixels(View view, int padding) {return 0;}
     int getExtraScrollSpacing() {return 0;}

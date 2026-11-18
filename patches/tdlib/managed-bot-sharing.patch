@@ -32,15 +32,13 @@
      case DialogType::Chat: {
 --- a/td/telegram/UserManager.h
 +++ b/td/telegram/UserManager.h
-@@ -256,6 +256,8 @@
+@@ -256,4 +256,6 @@
  
    bool is_user_bot(UserId user_id) const;
  
 +  bool is_user_managed_bot(UserId user_id, UserId manager_bot_user_id) const;
 +
    bool is_user_forum_bot(UserId user_id) const;
- 
-   struct BotData {
 --- a/td/telegram/UserManager.cpp
 +++ b/td/telegram/UserManager.cpp
 @@ -5460,6 +5460,13 @@

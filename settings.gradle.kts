@@ -36,6 +36,8 @@ include(
   ":extension:bridge",
   ":extension:${extra["extension"]}",
 
+  ":stub:fingerprint",
+
   ":app"
 )
 // Keep upstream pins untouched; build the reviewed TDLib source overlay.

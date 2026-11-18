@@ -172,7 +172,10 @@ public class CaptionPositionTest {
     static int getStatusBarHeight() {return 80;}
   }
   static class Lang {static boolean rtl() {return false;}}
-  static class Config {static final boolean MOVE_BUBBLE_TIME_RTL_TO_LEFT = false;}
+  static class Config {
+    static final boolean MOVE_BUBBLE_TIME_RTL_TO_LEFT = false, CODE_BLOCK_TIME_BELOW = true;
+  }
+  static class Text {static final int NO_CODE_BLOCK_END = 0;}
   static class Canvas {
     void drawRoundRect(Object... args) {} void drawText(Object... args) {} void drawArc(Object... args) {}
   }
@@ -192,6 +195,8 @@ public class CaptionPositionTest {
     int height = 30;
     int getHeight() {return height;} int getLastLineWidth() {return 100;}
     boolean getLastLineIsRtl() {return false;}
+    boolean endsWithCodeBlock() {return false;}
+    void setCodeBlockEnd(int end) {}
     int y, reserved;
     void draw(Canvas c, Object... args) {reserved = (int)args[2]; y = (int)args[3];}
   }

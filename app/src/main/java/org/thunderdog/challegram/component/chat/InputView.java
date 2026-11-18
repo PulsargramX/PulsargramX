@@ -149,7 +149,6 @@ public class InputView extends NoClipEditText implements InlineSearchContext.Cal
 
   // TODO: get rid of chat-related logic inside of InputView
   private @Nullable MessagesController controller;
-  private boolean ignoreDraft;
 
   private String suffix = "", prefix = "", displaySuffix = "";
   private int prefixWidth, suffixWidth;
@@ -886,7 +885,7 @@ public class InputView extends NoClipEditText implements InlineSearchContext.Cal
     TextSelection selection = getTextSelection();
     if (controller != null) {
       inlineContext.onTextChanged(s, str, selection != null && selection.isEmpty() ? selection.start : -1);
-      controller.onInputTextChange(s, !ignoreDraft && byUserAction);
+      controller.onInputTextChange(s, byUserAction);
     } else if (inputListener != null) {
       if (inputListener.canSearchInline(InputView.this)) {
         inlineContext.onTextChanged(s, str, selection != null && selection.isEmpty() ? selection.start : -1);
@@ -1317,7 +1316,6 @@ public class InputView extends NoClipEditText implements InlineSearchContext.Cal
     String current = getInput().trim();
     controller.setInputVisible(true, current.length() > 0);
     if (!draft.equals(current)) {
-      ignoreDraft = true;
       setInput(draft, draft.length() > 0, false);
       controller.updateSendButton(draft.toString(), false);
     }

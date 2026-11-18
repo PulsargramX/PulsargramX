@@ -24,9 +24,9 @@ import org.thunderdog.challegram.loader.ComplexReceiver;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.PorterDuffColorId;
-import org.thunderdog.challegram.tool.Drawables;
 import org.thunderdog.challegram.tool.Paints;
 import org.thunderdog.challegram.tool.PorterDuffPaint;
+import org.thunderdog.challegram.tool.Icons;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.unsorted.Settings;
 import org.thunderdog.challegram.util.DrawableProvider;
@@ -194,7 +194,7 @@ public final class ChatListPreview {
         if (iconId == R.drawable.baseline_camera_alt_16) {
           y += Screen.dp(.5f);
         }
-        Drawables.drawRtl(canvas, drawable, x, y, PorterDuffPaint.get(iconColorId, alpha),
+        Icons.drawBitmapRtl(canvas, iconId, x, y, PorterDuffPaint.get(iconColorId, alpha),
           viewWidth, rtl);
         x += Screen.dp(18f);
       }

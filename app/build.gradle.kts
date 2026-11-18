@@ -1203,6 +1203,13 @@ dependencies {
   )
   implementation(libs.androidx.biometric)
   sinceLollipopImplementation(libs.androidx.webkit)
+  Sdk.VARIANTS.values
+    .filter {
+      "sinceMarshmallowPreQ" in findExtraFolders(it)
+    }
+    .forEach {
+      "${it.flavor}CompileOnly"(project(":stub:fingerprint"))
+    }
   flavorImplementation(
     libs.androidx.palette.legacy,
     libs.androidx.palette.legacy,

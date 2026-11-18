@@ -39,6 +39,7 @@ import org.thunderdog.challegram.tool.Strings;
 import org.thunderdog.challegram.tool.Views;
 import org.thunderdog.challegram.unsorted.Settings;
 import org.thunderdog.challegram.util.MessageFilter;
+import org.thunderdog.challegram.util.text.BlockSwitches;
 import org.thunderdog.challegram.util.text.Highlight;
 import org.thunderdog.challegram.util.text.Text;
 import org.thunderdog.challegram.util.text.TextColorSet;
@@ -54,12 +55,69 @@ import me.vkryl.android.animator.BoolAnimator;
 import me.vkryl.android.animator.ListAnimator;
 import me.vkryl.android.animator.ReplaceAnimator;
 import me.vkryl.android.animator.VariableFloat;
+import me.vkryl.core.BitwiseUtils;
 import me.vkryl.core.MathUtils;
 import me.vkryl.core.StringUtils;
 import tgx.td.Td;
 
 public class TGMessageText extends TGMessage {
   private TdApi.FormattedText text;
+
+  private final BlockSwitches blockSwitches =
+    new BlockSwitches(new BlockSwitches.Listener() {
+      @Override
+      public void onBlockSwitchStart (Text text, boolean isReverse) {
+        // The height at the end is measured with the time at its final place
+        final float timeExpand =
+          isReverse ? switchTimeExpand.get() : getTimeExpand(calculateTextLastLineWidth());
+        final int finalLastLineWidth = calculateTextLastLineWidth(text.getLastLineWidth());
+        final float finalTimeExpand = getTimeExpand(finalLastLineWidth);
+        switchTimeExpand.set(finalTimeExpand);
+        rebuildContentDimensions();
+        final int finalHeight = getHeight() + text.getChangeRemainingHeight();
+        switchTimeExpand.set(timeExpand);
+        switchTimeExpand.setTo(finalTimeExpand);
+        rebuildContentDimensions();
+        // A reply or a forward is above the text, a link preview above or below it
+        final int[] block = text.getSwitchBlock();
+        final boolean isPreviewAbove = linkPreviewAboveText.getValue();
+        if (replyData != null || isForward() || (linkPreview != null && isPreviewAbove)) {
+          block[2] = 0;
+        }
+        if (linkPreview != null && !isPreviewAbove) {
+          block[3] = 0;
+        }
+        manager().messageResize().start(
+          TGMessageText.this,
+          finalHeight,
+          isReverse,
+          block,
+          text::getSwitchLines
+        );
+      }
+
+      @Override
+      public void onTextSizeChanged (Text text) {
+        TGMessageText.this.onTextSizeChanged(text);
+      }
+
+      @Override
+      public void onBlockSwitchStopped (Text text) {
+        manager().messageResize().stop(TGMessageText.this);
+      }
+
+      @Override
+      public boolean findVisiblePart (Text text, boolean atEnd, int[] range) {
+        return manager().messageResize().findVisiblePart(TGMessageText.this, atEnd, range);
+      }
+
+      @Override
+      public int getListHeight (Text text) {
+        return manager().getCodeBlockListHeight();
+      }
+    });
+  // Time below the last line of the text, 1f, or after it, 0f, while a block switches
+  private final VariableFloat switchTimeExpand = new VariableFloat(0f);
   private final VariableFloat lastLineWidth = new VariableFloat(0f);
   private final ReplaceAnimator<TextWrapper> visibleText = new ReplaceAnimator<>(new ReplaceAnimator.Callback() {
     @Override
@@ -264,6 +322,46 @@ public class TGMessageText extends TGMessage {
     return pendingMessageText != null;
   }
 
+  private void onTextSizeChanged (Text text) {
+    if (text.isSwitchingBlock()) {
+      switchTimeExpand.applyAnimation(text.getChangeProgress());
+    }
+    visibleText.measure(false);
+    onAnimatedHeightFrame(text.getChangeProgress());
+  }
+
+  @Override
+  public boolean isAnimatingHeight () {
+    final Text text = effectiveWrapper != null ? effectiveWrapper.getCurrent() : null;
+    return super.isAnimatingHeight() || text != null && text.isAnimatingChange();
+  }
+
+  @Override
+  protected boolean keepsTopOnHeightChange () {
+    // The height at the end of a switch is measured before MessageResize moves the message
+    return isSwitchingBlock() || super.keepsTopOnHeightChange();
+  }
+
+  private boolean isSwitchingBlock () {
+    final Text text = effectiveWrapper != null ? effectiveWrapper.getCurrent() : null;
+    return text != null && text.isSwitchingBlock();
+  }
+
+  @Override
+  public @Nullable int[] getSwitchedBlocks () {
+    // Ids of blocks are their offsets in the text, so those of a translation aren't kept
+    final Text text = effectiveWrapper != null ? effectiveWrapper.getCurrent() : null;
+    return text != null && translatedText == null ? text.getSwitchedBlocks() : null;
+  }
+
+  @Override
+  public void restoreSwitchedBlocks (int[] blocks) {
+    for (int i = 0; i + 1 < blocks.length; i += 2) {
+      final boolean isOn = BitwiseUtils.hasFlag(blocks[i + 1], Settings.MessageState.BLOCK_ON);
+      blockSwitches.choose(blocks[i], isOn);
+    }
+  }
+
   private boolean setText (TdApi.FormattedText text, boolean parseEntities) {
     return setText(text, parseEntities, false, true);
   }
@@ -299,6 +397,8 @@ public class TGMessageText extends TGMessage {
           .setClickCallback(clickCallback());
       }
       wrapper.addTextFlags(Text.FLAG_BIG_EMOJI);
+      wrapper.setTextFlagEnabled(Text.FLAG_WRAP_CODE_BLOCKS, needWrapCodeBlocks());
+      wrapper.setBlockSwitches(blockSwitches);
       if (useBubbles()) {
         wrapper.addTextFlags(Text.FLAG_ADJUST_TO_CURRENT_WIDTH);
       }
@@ -364,6 +464,11 @@ public class TGMessageText extends TGMessage {
 
   private int maxWidth;
 
+  private static boolean needWrapCodeBlocks () {
+    return !Config.AUTOMATIC_CODE_WRAPPING &&
+      Settings.instance().getNewSetting(Settings.SETTING_FLAG_WRAP_CODE_BLOCKS);
+  }
+
   @Override
   protected void buildContent (int maxWidth) {
     if (streamingAnimator != null) streamingAnimator.saveCursor();
@@ -371,7 +476,10 @@ public class TGMessageText extends TGMessage {
 
     this.maxWidth = maxWidth;
 
-    for (ListAnimator.Entry<TextWrapper> entry : visibleText) {
+    final boolean wrapCodeBlocks = needWrapCodeBlocks();
+    for (int i = 0; i < visibleText.size(); i++) {
+      final ListAnimator.Entry<TextWrapper> entry = visibleText.getEntry(i);
+      entry.item.setTextFlagEnabled(Text.FLAG_WRAP_CODE_BLOCKS, wrapCodeBlocks);
       entry.item.prepare(maxWidth);
     }
     visibleText.measure(false);
@@ -548,8 +656,13 @@ public class TGMessageText extends TGMessage {
     int linkPreviewY = getWebY();
     final int topTextY = startY + getTextTopOffset();
     final int bottomTextY = linkPreview == null ? topTextY : linkPreviewY + linkPreview.getHeight() + Screen.dp(6f) + Screen.dp(2f);
-    for (ListAnimator.Entry<TextWrapper> entry : visibleText) {
+    final int codeBlockEnd = useBubbles() ?
+      getActualRightContentEdge() - getBubbleContentPadding() :
+      Text.NO_CODE_BLOCK_END;
+    for (int i = 0; i < visibleText.size(); i++) {
+      final ListAnimator.Entry<TextWrapper> entry = visibleText.getEntry(i);
       final int startXRtl = getStartXRtl(entry.item, startX, maxWidth);
+      entry.item.setCodeBlockEnd(codeBlockEnd);
       boolean needClip = entry.getVisibility() != 1f && useBubbles();
       int saveToCount = -1;
       if (needClip) {
@@ -624,15 +737,36 @@ public class TGMessageText extends TGMessage {
   }
 
   private int calculateTextLastLineWidth () {
-    if (effectiveWrapper != null && Lang.rtl() == effectiveWrapper.getLastLineIsRtl()) {
+    return calculateTextLastLineWidth(Math.round(lastLineWidth.get()));
+  }
+
+  private int calculateTextLastLineWidth (int width) {
+    // An expandable quote has the icon of its switch at the bottom right
+    if (effectiveWrapper != null && Lang.rtl() == effectiveWrapper.getLastLineIsRtl() &&
+      !(Config.CODE_BLOCK_TIME_BELOW && effectiveWrapper.endsWithCodeBlock()) &&
+      !effectiveWrapper.endsWithExpandableQuote()) {
       // TODO: support for rtl <-> non-rtl transition
-      return Math.round(lastLineWidth.get());
+      return width;
     }
     return BOTTOM_LINE_EXPAND_HEIGHT;
   }
 
+  private float getTimeExpand (int textLastLineWidth) {
+    // As buildBubble places the time
+    final int timeWidth = computeBubbleTimePartWidth(true);
+    return needExpandBubble(textLastLineWidth, timeWidth, getRealContentMaxWidth()) ? 1f : 0f;
+  }
+
+  private boolean isTimeAfterSwitchingText () {
+    return isSwitchingBlock() &&
+      (linkPreview == null || linkPreviewAboveText.getFloatValue() == 1f);
+  }
+
   @Override
   protected int getBottomLineContentWidth () {
+    if (isTimeAfterSwitchingText()) {
+      return BOTTOM_LINE_DEFINE_BY_FACTOR;
+    }
     int textLastLineWidth = calculateTextLastLineWidth();
     float linkPreviewAboveText = this.linkPreviewAboveText.getFloatValue();
     if (linkPreviewAboveText == 0f || linkPreview == null) {
@@ -651,6 +785,9 @@ public class TGMessageText extends TGMessage {
 
   @Override
   protected float getIntermediateBubbleExpandFactor () {
+    if (isTimeAfterSwitchingText()) {
+      return switchTimeExpand.get();
+    }
     int textLastLineWidth = calculateTextLastLineWidth();
     int linkPreviewLastLineWidth = linkPreview != null ? linkPreview.getLastLineWidth() : textLastLineWidth;
     float fromExpandFactor = linkPreviewLastLineWidth == BOTTOM_LINE_EXPAND_HEIGHT ? 1f : 0f;

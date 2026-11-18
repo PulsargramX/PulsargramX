@@ -1698,7 +1698,8 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
   private boolean canGoPip () {
     MediaItem current = stack.getCurrent();
-    return Settings.instance().getPipButton() && current != null && current.isVideo() && !current.isGifType();
+    return Settings.instance().getPipButton() && (mode == MODE_MESSAGES || mode == MODE_SIMPLE) &&
+      current != null && current.isVideo() && !current.isGifType();
   }
 
   private boolean canEdit () {
@@ -4368,7 +4369,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   private int desiredThumbScrollByX;
 
   private void ensureThumbsPosition (boolean scrollBy, boolean onlyMeasure) {
-    if (thumbsRecyclerView.getMeasuredWidth() > 0) {
+    if (thumbsRecyclerView.getMeasuredWidth() > 0 && thumbsAdapter.items != null) {
       ensureThumbsPosition(scrollBy, onlyMeasure, thumbsAdapter.items.getFocusItemPosition());
     }
   }
@@ -8992,7 +8993,12 @@ public class MediaViewController extends ViewController<MediaViewController.Args
               return false;
             }
 
-            final @RightId int rightId = file.isVideo() ? RightId.SEND_VIDEOS : RightId.SEND_PHOTOS;
+            final @RightId int rightId;
+            if (file.isVideo()) {
+              rightId = RightId.SEND_VIDEOS;
+            } else {
+              rightId = asFiles ? RightId.SEND_DOCS : RightId.SEND_PHOTOS;
+            }
             if (m.showSlowModeRestriction(sendButton, options)) {
               return false;
             }

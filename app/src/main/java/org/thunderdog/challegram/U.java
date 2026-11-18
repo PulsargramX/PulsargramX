@@ -73,6 +73,7 @@ import android.widget.Toast;
 import androidx.annotation.CheckResult;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.core.os.EnvironmentCompat;
 import androidx.exifinterface.media.ExifInterface;
 import androidx.media3.common.C;
@@ -153,6 +154,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.RandomAccessFile;
 import java.lang.ref.SoftReference;
+import java.lang.reflect.Method;
 import java.net.URI;
 import java.security.MessageDigest;
 import java.text.SimpleDateFormat;
@@ -194,6 +196,7 @@ import okio.BufferedSource;
 import okio.Okio;
 import okio.Sink;
 import okio.Source;
+import tgx.player.VideoDecoders;
 import tgx.td.Td;
 import tgx.td.data.HlsPath;
 import tgx.td.data.HlsVideo;
@@ -213,8 +216,14 @@ public class U {
     return 0;
   }
 
+  private static final long MAX_GZIP_CONTENT_SIZE = 16 * 1024 * 1024;
+
   public static String gzipFileToString (String path) {
     try (BufferedSource buffer = Okio.buffer(Okio.source(new GZIPInputStream(new FileInputStream(path))))) {
+      if (buffer.request(MAX_GZIP_CONTENT_SIZE + 1)) {
+        Log.w(Log.TAG_GIF_LOADER, "Unpacked gzip is too large, path: %s", path);
+        return null;
+      }
       return buffer.readString(StringUtils.UTF_8);
     } catch (Throwable t) {
       Log.w(Log.TAG_GIF_LOADER, "Cannot decode gzip, path: %s", t, path);
@@ -265,6 +274,12 @@ public class U {
   }
 
   public static String getRingtoneName (@NonNull Uri ringtoneUri, @Nullable String fallbackName) {
+    if (ringtoneUri.equals(TdlibNotificationManager.getTelegramCallRingtone())) {
+      return Lang.getString(R.string.RingtoneTelegramCall);
+    }
+    if (ringtoneUri.equals(android.provider.Settings.System.DEFAULT_RINGTONE_URI)) {
+      return Lang.getString(R.string.RingtoneSystemDefault);
+    }
     String[] projection = {MediaStore.MediaColumns.TITLE};
     try {
       try (Cursor cur = UI.getContext().getContentResolver().query(ringtoneUri, projection, null, null, null)) {
@@ -487,7 +502,8 @@ public class U {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
       switch (notificationId) {
         case TdlibNotificationManager.ID_FOREGROUND_ONGOING_CALL_NOTIFICATION:
-        case TdlibNotificationManager.ID_FOREGROUND_INCOMING_CALL_NOTIFICATION: {
+        case TdlibNotificationManager.ID_FOREGROUND_INCOMING_CALL_NOTIFICATION:
+        case TdlibNotificationManager.ID_FOREGROUND_CALL_START: {
           int knownType = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL;
           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && (
             Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE ||
@@ -497,7 +513,18 @@ public class U {
             knownType |= android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
           }
           knownType |= android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK;
-          service.startForeground(notificationId, notification, knownType);
+          int microphone = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
+          try {
+            service.startForeground(notificationId, notification, knownType);
+          } catch (SecurityException e) {
+            if ((knownType & microphone) == 0) {
+              throw e;
+            }
+            // Android 14+ refuses the microphone to an app that isn't visible, e.g. a call
+            // answered from a watch
+            Log.e("Unable to use the microphone in a foreground service", e);
+            service.startForeground(notificationId, notification, knownType & ~microphone);
+          }
           return;
         }
         case TdlibNotificationManager.ID_FOREGROUND_MUSIC:
@@ -705,7 +732,9 @@ public class U {
     final int extensionMode = preferExtensions || org.thunderdog.challegram.unsorted.Settings.instance().getNewSetting(org.thunderdog.challegram.unsorted.Settings.SETTING_FLAG_FORCE_EXO_PLAYER_EXTENSIONS) ?
       DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER :
       DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON;
-    final RenderersFactory renderersFactory = new DefaultRenderersFactory(context).setExtensionRendererMode(extensionMode);
+    final RenderersFactory renderersFactory = new DefaultRenderersFactory(context)
+      .setExtensionRendererMode(extensionMode)
+      .setEnableDecoderFallback(true);
     final MediaSource.Factory mediaSourceFactory = new DefaultMediaSourceFactory(context, new DefaultExtractorsFactory().setConstantBitrateSeekingEnabled(true));
     final AnalyticsCollector analyticsCollector;
     if (Log.getLogLevel() > Log.LEVEL_ASSERT) {
@@ -790,6 +819,7 @@ public class U {
       public DataSource redirectDataSource (Uri uri) {
         if (uri.equals(manifestUri)) {
           String playlistData = hlsVideo.multivariantPlaylistData(
+            VideoDecoders.getVideoDecoderSupport(),
             BuildConfig.DEBUG
           );
           return new ByteArrayDataSource(playlistData.getBytes());
@@ -917,17 +947,53 @@ public class U {
     return getNotificationChannel("maybe", R.string.NotificationChannelMaybe);
   }
 
+  public static final String CHANNEL_ID_ONGOING_CALLS = "ongoing_calls";
+
+  public static String getOngoingCallsNotificationChannel () {
+    return getNotificationChannel(
+      CHANNEL_ID_ONGOING_CALLS,
+      R.string.NotificationChannelOngoingCalls
+    );
+  }
+
+  public static final String CHANNEL_ID_INCOMING_CALLS_IN_APP = "incoming_calls_in_app";
+
+  public static String getIncomingCallsInAppNotificationChannel () {
+    String id = CHANNEL_ID_INCOMING_CALLS_IN_APP;
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      android.app.NotificationChannel channel = new android.app.NotificationChannel(
+        id,
+        Lang.getString(R.string.NotificationChannelIncomingCallScreen),
+        NotificationManager.IMPORTANCE_HIGH
+      );
+      channel.setSound(null, null);
+      channel.enableVibration(false);
+      createNotificationChannel(channel);
+    }
+    return id;
+  }
+
   public static String getNotificationChannel (String id, int stringRes) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       android.app.NotificationChannel channel = new android.app.NotificationChannel(id, Lang.getString(stringRes), NotificationManager.IMPORTANCE_LOW);
-      NotificationManager manager = (NotificationManager) AppContext.get().getSystemService(Context.NOTIFICATION_SERVICE);
-      try {
-        manager.createNotificationChannel(channel);
-      } catch (Throwable t) {
-        Log.v("Unable to create notification channel for id: %s", new TdlibNotificationChannelGroup.ChannelCreationFailureException(t), id);
-      }
+      createNotificationChannel(channel);
     }
     return id;
+  }
+
+  @RequiresApi(Build.VERSION_CODES.O)
+  private static void createNotificationChannel (android.app.NotificationChannel channel) {
+    NotificationManager manager =
+      (NotificationManager) AppContext.get().getSystemService(Context.NOTIFICATION_SERVICE);
+    try {
+      manager.createNotificationChannel(channel);
+    } catch (Throwable t) {
+      Log.v(
+        "Unable to create notification channel for id: %s",
+        new TdlibNotificationChannelGroup.ChannelCreationFailureException(t),
+        channel.getId()
+      );
+    }
   }
 
   private static Integer maxTextureSize;
@@ -1245,13 +1311,33 @@ public class U {
     UI.showToast(R.string.NoAppToOpen, Toast.LENGTH_SHORT);
   }
 
+  private static Method hiddenDurationScale;
+  private static boolean noHiddenDurationScale;
+
   public static float getAnimationScale (Context context) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
       return ValueAnimator.getDurationScale();
     }
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O && !noHiddenDurationScale) {
+      // Unlike the setting, it's 0 while battery saver of Android 5.0–7.1 turns animators off
+      try {
+        if (hiddenDurationScale == null) {
+          hiddenDurationScale = ValueAnimator.class.getMethod("getDurationScale");
+        }
+        return (Float) hiddenDurationScale.invoke(null);
+      } catch (Throwable t) {
+        noHiddenDurationScale = true;
+      }
+    }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
       try {
         return Settings.Global.getFloat(context.getContentResolver(), Settings.Global.ANIMATOR_DURATION_SCALE, 1.0f);
+      } catch (Throwable ignored) { }
+    } else {
+      try {
+        @SuppressWarnings("deprecation")
+        String key = Settings.System.ANIMATOR_DURATION_SCALE;
+        return Settings.System.getFloat(context.getContentResolver(), key, 1.0f);
       } catch (Throwable ignored) { }
     }
     return 1.0f;
@@ -2187,7 +2273,15 @@ public class U {
     return measureText(in, p);
   }
 
-  public static float measureTextRun (@Nullable CharSequence in, int start, int end, @NonNull Paint p, boolean isRtl) {
+  public static float measureTextRun (
+    @Nullable CharSequence in,
+    int start,
+    int end,
+    int contextStart,
+    int contextEnd,
+    @NonNull Paint p,
+    boolean isRtl
+  ) {
     final int count = end - start;
 
     if (StringUtils.isEmpty(in) || count <= 0) {
@@ -2195,7 +2289,7 @@ public class U {
     }
 
     if (Config.USE_TEXT_ADVANCE && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-      return p.getRunAdvance(in, start, end, 0, in.length(), isRtl, end);
+      return p.getRunAdvance(in, start, end, contextStart, contextEnd, isRtl, end);
     }
 
     return measureText(in, start, end, p);

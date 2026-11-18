@@ -14,7 +14,9 @@ class AnimationDecoderResourcesTest(unittest.TestCase):
   def test_preview_decoders_do_not_request_per_cpu_worker_pools(self):
     method = java_method(read("app/jni/gif.cpp"), "int open_codec_context (")
     harness = r'''
+#include <algorithm>
 #include <cassert>
+#include <cstdint>
 #include <cerrno>
 #include <initializer_list>
 
@@ -24,8 +26,8 @@ constexpr int FF_THREAD_FRAME = 1, FF_THREAD_SLICE = 2, TAG_GIF_LOADER = 0;
 #define AVERROR(value) (-(value))
 #define loge(...) ((void) 0)
 struct AVCodec { int capabilities; };
-struct AVCodecContext { int thread_count = 0, thread_type = 3; };
-struct AVCodecParameters { int codec_id = 1; };
+struct AVCodecContext { int thread_count = 0, thread_type = 3; int64_t max_pixels = 0; };
+struct AVCodecParameters { int codec_id = 1, width = 320, height = 200; };
 struct AVStream { AVCodecParameters *codecpar; };
 struct AVFormatContext { AVStream **streams; };
 struct AVDictionary {};
@@ -40,6 +42,7 @@ int avcodec_parameters_to_context(AVCodecContext *, AVCodecParameters *) {
   return parameterResult;
 }
 void av_dict_set(AVDictionary **, const char *, const char *, int) {}
+void av_dict_free(AVDictionary **) {}
 int avcodec_open2(AVCodecContext *context, const AVCodec *decoder, AVDictionary **) {
   // Model an eight-core device: FFmpeg's automatic frame pool uses cores + 1.
   int threads = context->thread_count == 0 ? 9 : context->thread_count;
@@ -60,8 +63,8 @@ int main() {
     for (int index = 0; index < 50; ++index) {
       AVCodecContext *context = nullptr;
       int streamIndex = -1;
-      assert(open_codec_context(&streamIndex, &context, &format, AVMEDIA_TYPE_VIDEO) == 0);
-      assert(context && streamIndex == 0);
+      assert(open_codec_context(&streamIndex, &context, &format, AVMEDIA_TYPE_VIDEO, 512, 512 * 512, nullptr) == 0);
+      assert(context && streamIndex == 0 && context->max_pixels == 512 * 512);
       delete context;
     }
     assert(opened == 50);
@@ -71,16 +74,16 @@ int main() {
   int streamIndex = -1;
   opened = 0;
   streamResult = -7;
-  assert(open_codec_context(&streamIndex, &context, &format, AVMEDIA_TYPE_VIDEO) == -7);
+  assert(open_codec_context(&streamIndex, &context, &format, AVMEDIA_TYPE_VIDEO, 512, 512 * 512, nullptr) == -7);
   assert(!context && opened == 0);
   streamResult = 0;
   parameterResult = -8;
-  assert(open_codec_context(&streamIndex, &context, &format, AVMEDIA_TYPE_VIDEO) == -8);
+  assert(open_codec_context(&streamIndex, &context, &format, AVMEDIA_TYPE_VIDEO, 512, 512 * 512, nullptr) == -8);
   assert(opened == 0);
   delete context;
   parameterResult = 0;
   openResult = -9;
-  assert(open_codec_context(&streamIndex, &context, &format, AVMEDIA_TYPE_VIDEO) < 0);
+  assert(open_codec_context(&streamIndex, &context, &format, AVMEDIA_TYPE_VIDEO, 512, 512 * 512, nullptr) < 0);
   assert(opened == 1);
   delete context;
 }
@@ -121,6 +124,7 @@ public class DecoderHarness {
     void setTotalFrameCount(long count) {}
     int getFitzpatrickType() {return 0;}
     int getOptimizationMode() {return OptimizationMode.NONE;}
+    int getMaxSourceSize() {return 0;}
     int getRequestedSize() {return 0;}
     boolean needDecodeLastFrame() {return false;}
     boolean hasLooped() {return false;}
@@ -131,7 +135,7 @@ public class DecoderHarness {
   static class N {
     static int created;
     static boolean failFrame;
-    static long createDecoder(String path, long[] metadata, double start) {
+    static long createDecoder(String path, long[] metadata, double start, int maxSourceSize) {
       metadata[0]=320; metadata[1]=200;
       return ++created;
     }

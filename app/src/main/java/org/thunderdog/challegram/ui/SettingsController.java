@@ -57,6 +57,7 @@ import org.thunderdog.challegram.navigation.MoreDelegate;
 import org.thunderdog.challegram.navigation.NavigationController;
 import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.support.ViewSupport;
+import org.thunderdog.challegram.telegram.CallProblems;
 import org.thunderdog.challegram.telegram.ConnectionListener;
 import org.thunderdog.challegram.telegram.GlobalTokenStateListener;
 import org.thunderdog.challegram.telegram.SessionListener;
@@ -140,6 +141,10 @@ public class SettingsController extends ViewController<Void> implements
     if (!oneShot) {
       oneShot = true;
       tdlib.listeners().subscribeToStickerUpdates(this);
+    } else {
+      // Problems may have been fixed on the screens opened from here
+      checkErrors(true);
+      loadActiveSessions();
     }
   }
 
@@ -282,6 +287,8 @@ public class SettingsController extends ViewController<Void> implements
         return R.string.NotificationsErrorPermission;
       case TdlibNotificationManager.Status.BLOCKED_CATEGORY:
         return R.string.NotificationsErrorBlockedCategory;
+      case TdlibNotificationManager.Status.BACKGROUND_RESTRICTED:
+        return R.string.NotificationsErrorBackgroundRestricted;
       case TdlibNotificationManager.Status.DISABLED_SYNC:
       case TdlibNotificationManager.Status.DISABLED_APP_SYNC:
       case TdlibNotificationManager.Status.PUSH_SERVICE_MISSING:
@@ -303,35 +310,15 @@ public class SettingsController extends ViewController<Void> implements
         break;
     }
 
-    boolean blockedPrivate = tdlib.notifications().areNotificationsBlocked(tdlib.notifications().scopePrivate());
-    boolean blockedGroup = tdlib.notifications().areNotificationsBlocked(tdlib.notifications().scopeGroup());
-    boolean blockedChannel = tdlib.notifications().areNotificationsBlocked(tdlib.notifications().scopeChannel());
-
-    int scopeCount = 0;
-    if (blockedPrivate)
-      scopeCount++;
-    if (blockedGroup)
-      scopeCount++;
-    if (blockedChannel)
-      scopeCount++;
-
-    if (scopeCount == 1) {
-      if (blockedPrivate) {
-        return R.string.NotificationsErrorBlockedPrivate;
-      } else if (blockedGroup) {
-        return R.string.NotificationsErrorBlockedGroup;
-      } else if (blockedChannel) {
-        return R.string.NotificationsErrorBlockedChannel;
-      }
-      throw new RuntimeException();
-    } else if (scopeCount > 1) {
-      return R.string.NotificationsErrorBlockedMixed;
-    }
-
-    return 0;
+    return tdlib.notifications().getBlockedScopesDescription();
   }
 
   private void checkErrors (boolean updateList) {
+    checkNotificationErrors(updateList);
+    checkCallErrors(updateList);
+  }
+
+  private void checkNotificationErrors (boolean updateList) {
     long oldProblematicChatId = this.problematicChatId;
     boolean hasNotificationError = tdlib.notifications().hasLocalNotificationProblem();
     int notificationErrorDescriptionRes = hasNotificationError ? getNotificationErrorDescription() : 0;
@@ -341,20 +328,64 @@ public class SettingsController extends ViewController<Void> implements
     if (this.hasNotificationError != hasNotificationError || (hasNotificationError && (this.notificationErrorDescriptionRes != notificationErrorDescriptionRes || this.problematicChatId != oldProblematicChatId))) {
       this.hasNotificationError = hasNotificationError;
       this.notificationErrorDescriptionRes = notificationErrorDescriptionRes;
-      if (updateList && adapter != null) {
-        int position = adapter.indexOfViewById(R.id.btn_notificationSettings);
-        if (position != -1) {
-          final ListItem item = adapter.getItems().get(position);
-          if (hadDescription != hasDescription) {
-            item.setViewType(hasDescription ? ListItem.TYPE_VALUED_SETTING_COMPACT : ListItem.TYPE_SETTING);
-            adapter.notifyItemChanged(position);
-          } else {
-            adapter.updateValuedSettingByPosition(position);
-          }
-        }
+      if (updateList) {
+        updateErrorRow(R.id.btn_notificationSettings, hadDescription, hasDescription);
       }
     } else {
       this.notificationErrorDescriptionRes = notificationErrorDescriptionRes;
+    }
+  }
+
+  private @StringRes int callErrorDescriptionRes;
+  private long problematicCallChatId;
+
+  private @StringRes int getCallErrorDescription () {
+    this.problematicCallChatId = 0;
+    if (CallProblems.isOffForDevice(tdlib)) {
+      return R.string.CallProblemOffForDevice;
+    }
+    @CallProblems.Type int problem = CallProblems.getOfSettings(tdlib);
+    if (problem == CallProblems.Type.DISPLAY_FAILED) {
+      problematicCallChatId = tdlib.settings().getLastCallProblematicChat();
+      if (problematicCallChatId != 0) {
+        return R.string.CallProblemFailedFrom;
+      }
+    }
+    return CallProblems.getDescription(problem);
+  }
+
+  private void checkCallErrors (boolean updateList) {
+    if (!BuildConfig.CALLS_AVAILABLE) {
+      return;
+    }
+    long oldProblematicCallChatId = this.problematicCallChatId;
+    int callErrorDescriptionRes = getCallErrorDescription();
+    if (this.callErrorDescriptionRes != callErrorDescriptionRes ||
+      this.problematicCallChatId != oldProblematicCallChatId) {
+      boolean hadDescription = this.callErrorDescriptionRes != 0;
+      this.callErrorDescriptionRes = callErrorDescriptionRes;
+      if (updateList) {
+        updateErrorRow(R.id.btn_callSettings, hadDescription, callErrorDescriptionRes != 0);
+      }
+    }
+  }
+
+  private void updateErrorRow (int id, boolean hadDescription, boolean hasDescription) {
+    if (adapter == null) {
+      return;
+    }
+    int position = adapter.indexOfViewById(id);
+    if (position != -1) {
+      final ListItem item = adapter.getItems().get(position);
+      if (hadDescription != hasDescription) {
+        item.setViewType(hasDescription ?
+          ListItem.TYPE_VALUED_SETTING_COMPACT :
+          ListItem.TYPE_SETTING
+        );
+        adapter.notifyItemChanged(position);
+      } else {
+        adapter.updateValuedSettingByPosition(position);
+      }
     }
   }
 
@@ -451,13 +482,28 @@ public class SettingsController extends ViewController<Void> implements
       public void setValuedSetting (ListItem item, SettingView view, boolean isUpdate) {
         BusinessLocationUi.clearPreview(view);
         boolean hasError = false;
+        boolean hasProblem = false;
         final int itemId = item.getId();
         if (itemId == R.id.btn_notificationSettings) {
-          checkErrors(false);
-          hasError = hasNotificationError;
+          checkNotificationErrors(false);
+          hasProblem = hasNotificationError;
+          item.setIconRes(hasProblem ?
+            R.drawable.baseline_notification_important_24 :
+            R.drawable.baseline_notifications_24
+          );
+          view.setIcon(item.getIconResource());
+        } else if (itemId == R.id.btn_callSettings) {
+          checkCallErrors(false);
+          hasProblem = callErrorDescriptionRes != 0;
+          item.setIconRes(hasProblem ?
+            R.drawable.baseline_call_alert_24 :
+            R.drawable.baseline_call_settings_24
+          );
+          view.setIcon(item.getIconResource());
         } else if (itemId == R.id.btn_devices) {
           hasError = sessions != null && sessions.incompleteLoginAttempts.length > 0;
         }
+        view.setIconColorId(hasProblem ? ColorId.iconNegative : ColorId.NONE);
         view.setUnreadCounter(hasError ? Tdlib.CHAT_FAILED : 0, false, isUpdate);
         if (itemId == R.id.btn_sourceCode) {
           PullRequest specificPullRequest = (PullRequest) item.getData();
@@ -537,6 +583,13 @@ public class SettingsController extends ViewController<Void> implements
             } else {
               view.setData(notificationErrorDescriptionRes);
             }
+          }
+        } else if (itemId == R.id.btn_callSettings) {
+          if (callErrorDescriptionRes == R.string.CallProblemFailedFrom) {
+            view.setData(Lang.getStringBold(callErrorDescriptionRes,
+              tdlib.chatTitle(problematicCallChatId)));
+          } else if (callErrorDescriptionRes != 0) {
+            view.setData(callErrorDescriptionRes);
           }
         } else if (itemId == R.id.btn_suggestion) {
           TdApi.SuggestedAction action = (TdApi.SuggestedAction) item.getData();
@@ -655,8 +708,30 @@ public class SettingsController extends ViewController<Void> implements
 
     checkErrors(false);
 
-    items.add(new ListItem(notificationErrorDescriptionRes != 0 ? ListItem.TYPE_VALUED_SETTING_COMPACT : ListItem.TYPE_SETTING, R.id.btn_notificationSettings, R.drawable.baseline_notifications_24, R.string.Notifications));
+    items.add(new ListItem(
+      notificationErrorDescriptionRes != 0 ?
+        ListItem.TYPE_VALUED_SETTING_COMPACT :
+        ListItem.TYPE_SETTING,
+      R.id.btn_notificationSettings,
+      hasNotificationError ?
+        R.drawable.baseline_notification_important_24 :
+        R.drawable.baseline_notifications_24,
+      R.string.Notifications
+    ));
     items.add(new ListItem(ListItem.TYPE_SEPARATOR));
+    if (BuildConfig.CALLS_AVAILABLE) {
+      items.add(new ListItem(
+        callErrorDescriptionRes != 0 ?
+          ListItem.TYPE_VALUED_SETTING_COMPACT :
+          ListItem.TYPE_SETTING,
+        R.id.btn_callSettings,
+        callErrorDescriptionRes != 0 ?
+          R.drawable.baseline_call_alert_24 :
+          R.drawable.baseline_call_settings_24,
+        R.string.Calls
+      ));
+      items.add(new ListItem(ListItem.TYPE_SEPARATOR));
+    }
     items.add(new ListItem(ListItem.TYPE_SETTING, R.id.btn_chatSettings, R.drawable.baseline_data_usage_24, R.string.DataSettings));
     items.add(new ListItem(ListItem.TYPE_SEPARATOR));
     items.add(new ListItem(ListItem.TYPE_SETTING, R.id.btn_privacySettings, R.drawable.baseline_lock_24, R.string.PrivacySettings));
@@ -811,6 +886,11 @@ public class SettingsController extends ViewController<Void> implements
     runOnUiThreadOptional(this::loadActiveSessions);
   }
 
+  @Override
+  public void onSessionCanAcceptCallsChanged (Tdlib tdlib, long sessionId, boolean canAcceptCalls) {
+    runOnUiThreadOptional(() -> checkCallErrors(true));
+  }
+
   private boolean loadingActiveSessions;
   private Tdlib.SessionsInfo sessions;
 
@@ -823,6 +903,7 @@ public class SettingsController extends ViewController<Void> implements
         this.sessions = sessionsInfo;
         this.loadingActiveSessions = false;
         adapter.updateValuedSettingById(R.id.btn_devices);
+        checkCallErrors(true);
         executeScheduledAnimation();
       })
     );
@@ -1247,6 +1328,8 @@ public class SettingsController extends ViewController<Void> implements
       navigateTo(new SettingsLanguageController(context, tdlib));
     } else if (viewId == R.id.btn_notificationSettings) {
       navigateTo(new SettingsNotificationController(context, tdlib));
+    } else if (viewId == R.id.btn_callSettings) {
+      tdlib.ui().openCallSettings(this);
     } else if (viewId == R.id.btn_devices) {
       navigateTo(new SettingsSessionsController(context, tdlib));
     } else if (viewId == R.id.btn_checkUpdates) {

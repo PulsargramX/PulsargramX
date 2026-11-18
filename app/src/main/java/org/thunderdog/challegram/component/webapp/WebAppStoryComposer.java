@@ -242,7 +242,7 @@ final class WebAppStoryComposer {
     if (source != null) { source.delete(); source = null; }
     File uploadedFile = ready; ready = null;
     TdApi.PostStory request = new TdApi.PostStory(ownChatId, content, areas, new TdApi.FormattedText(caption, null),
-      privacy, new int[0], 86400, null, keep, protect);
+      null, privacy, new int[0], 86400, null, keep, protect);
     upload = new WebAppStoryUpload(actions.host.tdlib(), request, uploadedFile, success -> {
       posting = false; upload = null;
       if (actions.alive()) Toast.makeText(actions.host.context(), success ? R.string.WebAppStoryPosted : R.string.WebAppStoryFailed, Toast.LENGTH_LONG).show();

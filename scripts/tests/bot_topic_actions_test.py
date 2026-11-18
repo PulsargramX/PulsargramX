@@ -254,13 +254,20 @@ class BotTopicActionsTest(unittest.TestCase):
   def test_topic_action_lifecycle(self):
     with tempfile.TemporaryDirectory(prefix="bot-topic-actions-") as directory:
       work = Path(directory)
+      wrapper_revision = subprocess.check_output(
+        ["git", "-C", str(ROOT), "rev-parse", "HEAD:tdlib"], text=True).strip()
+      source_revision = subprocess.check_output(
+        ["git", "-C", str(ROOT / "tdlib"), "rev-parse",
+         wrapper_revision + ":source/td"], text=True).strip()
       patches = sorted((ROOT / "patches/tdlib").glob("*.patch"))
       for patch in patches:
         for name in re.findall(r"^--- a/(.+)$", patch.read_text(), re.M):
           target = work / name
           if not target.exists():
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(ROOT / "tdlib/source/td" / name, target)
+            target.write_bytes(subprocess.check_output(
+              ["git", "-C", str(ROOT / "tdlib/source/td"), "show",
+               source_revision + ":" + name]))
         subprocess.run(["git", "apply", "--check", str(patch)], cwd=work, check=True)
         subprocess.run(["git", "apply", str(patch)], cwd=work, check=True)
       actions = (work / "td/telegram/DialogActionManager.cpp").read_text()

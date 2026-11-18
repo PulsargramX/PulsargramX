@@ -66,11 +66,17 @@ public class PredictiveBackLayersTest {
     void clearPreview() {}
     void applyPreview(ViewController<?> controller) {}
   }
+  static class DisplayMetrics { int widthPixels=1080, heightPixels=2400; }
+  static class Resources {
+    DisplayMetrics getDisplayMetrics() { return new DisplayMetrics(); }
+  }
+  static class Context { Resources getResources() { return new Resources(); } }
   static class Root {
+    int height=2000;
     boolean capture=true;
     boolean prepareBackHeader(HeaderView header, View button) { return capture; }
     int getMeasuredWidth() { return 1000; }
-    int getMeasuredHeight() { return 2000; }
+    int getMeasuredHeight() { return height; }
   }
   static class ViewController<T> {
     final View view=new View();
@@ -99,6 +105,7 @@ public class PredictiveBackLayersTest {
     static final boolean USE_PREVIEW_TRANSLATION=true;
     static final float PREVIEW_FADED_FACTOR=.6f, PREVIEW_FADE_CHANGE_FACTOR=.1f;
     final Stack stack=new Stack();
+    final Context context=new Context();
     final Root rootView=new Root();
     final HeaderView headerView=new HeaderView();
     final View floatingButton=new View(), fadeView=new View();
@@ -166,6 +173,16 @@ public class PredictiveBackLayersTest {
           }
         }
       }
+    }
+    for (int height : new int[] {0, 2000}) {
+      Navigation n=new Navigation();
+      n.rootView.height=height;
+      n.prepareFactorAnimation(n.stack.previous,n.stack.current,false,
+        Navigation.TRANSLATION_HORIZONTAL,PredictiveGesture.NONE);
+      check(n.currentWidth==(height==0 ? 1080 : 1000),"Use display width before layout");
+      check(n.currentHeight==(height==0 ? 2400 : 2000),"Use display height before layout");
+      n.finishTransaction(Navigation.FINISH_PREVIEW);
+      Views.flush();
     }
     // Fallback is resolved before deciding whether this transition needs cached layers.
     for (int fallback=0; fallback<4; fallback++) {
